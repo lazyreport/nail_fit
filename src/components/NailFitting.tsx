@@ -93,6 +93,8 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
   const [selectedClientId, setSelectedClientId] = useState<number | null>(
     initialClientId || null
   );
+  const [preferSmallerSizes, setPreferSmallerSizes] = useState(true);
+  const [useTaperedCompensation, setUseTaperedCompensation] = useState(true);
 
   useEffect(() => {
     async function init() {
@@ -425,49 +427,90 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
 
         // Find width match
         if (measurement.nail_bed_width > 0) {
-          // Only adjust width for tapered shapes
-          const targetWidth = isTaperedShape
-            ? measurement.nail_bed_width + 0.5
-            : measurement.nail_bed_width;
+          const targetWidth =
+            isTaperedShape && useTaperedCompensation
+              ? measurement.nail_bed_width + 0.5
+              : measurement.nail_bed_width;
 
-          // Find sizes that are smaller than or equal to the target width
-          let validWidthSizes = sizes.filter(
-            (size) => size.width <= targetWidth
-          );
+          let validWidthSizes: NailTipSize[] = [];
 
-          if (validWidthSizes.length > 0) {
-            // Sort by width in descending order to get the largest valid size
-            validWidthSizes = validWidthSizes.sort((a, b) => b.width - a.width);
+          if (preferSmallerSizes) {
+            // Strategy 1: Prefer smaller sizes
+            validWidthSizes = sizes.filter((size) => size.width <= targetWidth);
 
-            // Get all sizes that have the same width as the best match
-            const bestWidth = validWidthSizes[0].width;
-            matchResult.width = validWidthSizes.filter(
-              (size) => size.width === bestWidth
-            );
+            if (validWidthSizes.length > 0) {
+              // Sort by width in descending order to get the largest valid size
+              validWidthSizes.sort((a, b) => b.width - a.width);
+
+              // Get all sizes that have the same width as the best match
+              const bestWidth = validWidthSizes[0].width;
+              matchResult.width = validWidthSizes.filter(
+                (size) => size.width === bestWidth
+              );
+            }
+          } else {
+            // Strategy 2: Find closest match
+            // Calculate absolute difference from target for each size
+            const sizesWithDiff = sizes.map((size) => ({
+              ...size,
+              diff: Math.abs(size.width - targetWidth),
+            }));
+
+            // Sort by difference (smallest first)
+            sizesWithDiff.sort((a, b) => a.diff - b.diff);
+
+            if (sizesWithDiff.length > 0) {
+              // Get all sizes that have the same difference as the best match
+              const bestDiff = sizesWithDiff[0].diff;
+              matchResult.width = sizesWithDiff
+                .filter((size) => size.diff === bestDiff)
+                .map(({ diff, ...size }) => size); // Remove the diff property
+            }
           }
         }
 
         // Find curve match
         const measurementCurve = measurement.nail_bed_curve;
         if (measurementCurve !== undefined && measurementCurve > 0) {
-          // Try to find sizes with slightly larger curvature
-          const validCurveSizes = sizes.filter(
-            (size) =>
-              size.inner_curve !== undefined &&
-              size.inner_curve >= measurementCurve
-          );
-
-          if (validCurveSizes.length > 0) {
-            // Sort sizes by curve in ascending order to get the smallest valid curve
-            validCurveSizes.sort(
-              (a, b) => (a.inner_curve || 0) - (b.inner_curve || 0)
+          if (preferSmallerSizes) {
+            // Find sizes with curve >= measurement
+            const validCurveSizes = sizes.filter(
+              (size) =>
+                size.inner_curve !== undefined &&
+                size.inner_curve >= measurementCurve
             );
 
-            // Get all sizes that have the same curve as the best match
-            const bestCurve = validCurveSizes[0].inner_curve;
-            matchResult.curve = validCurveSizes.filter(
-              (size) => size.inner_curve === bestCurve
-            );
+            if (validCurveSizes.length > 0) {
+              // Sort by curve in ascending order to get the smallest valid curve
+              validCurveSizes.sort(
+                (a, b) => (a.inner_curve || 0) - (b.inner_curve || 0)
+              );
+
+              // Get all sizes that have the same curve as the best match
+              const bestCurve = validCurveSizes[0].inner_curve;
+              matchResult.curve = validCurveSizes.filter(
+                (size) => size.inner_curve === bestCurve
+              );
+            }
+          } else {
+            // Find closest curve match
+            const sizesWithDiff = sizes
+              .filter((size) => size.inner_curve !== undefined)
+              .map((size) => ({
+                ...size,
+                diff: Math.abs((size.inner_curve || 0) - measurementCurve),
+              }));
+
+            if (sizesWithDiff.length > 0) {
+              // Sort by difference (smallest first)
+              sizesWithDiff.sort((a, b) => a.diff - b.diff);
+
+              // Get all sizes that have the same difference as the best match
+              const bestDiff = sizesWithDiff[0].diff;
+              matchResult.curve = sizesWithDiff
+                .filter((size) => size.diff === bestDiff)
+                .map(({ diff, ...size }) => size); // Remove the diff property
+            }
           }
         }
 
@@ -650,6 +693,40 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
               >
                 {loading ? "Finding matches..." : "Size"}
               </button>
+            </div>
+
+            {/* Width Matching Strategy Toggle */}
+            <div className="flex items-center">
+              <input
+                type="checkbox"
+                id="prefer-smaller-sizes"
+                checked={preferSmallerSizes}
+                onChange={(e) => setPreferSmallerSizes(e.target.checked)}
+                className="h-4 w-4 text-gray-600 focus:ring-gray-500 border-gray-300 rounded"
+              />
+              <label
+                htmlFor="prefer-smaller-sizes"
+                className="ml-2 block text-sm text-gray-700"
+              >
+                Prefer smaller sizes (when unchecked, finds closest match)
+              </label>
+            </div>
+
+            {/* Tapered Shape Compensation Toggle */}
+            <div className="flex items-center">
+              <input
+                type="checkbox"
+                id="tapered-compensation"
+                checked={useTaperedCompensation}
+                onChange={(e) => setUseTaperedCompensation(e.target.checked)}
+                className="h-4 w-4 text-gray-600 focus:ring-gray-500 border-gray-300 rounded"
+              />
+              <label
+                htmlFor="tapered-compensation"
+                className="ml-2 block text-sm text-gray-700"
+              >
+                Add 0.5mm for tapered shapes (almond/stiletto)
+              </label>
             </div>
 
             {selectedSet &&

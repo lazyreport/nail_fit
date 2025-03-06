@@ -692,18 +692,14 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
             {/* Size Table */}
             {selectedSet && (
               <div className="mt-4 bg-white rounded-lg shadow overflow-hidden">
-                <div className="px-4 py-3 border-b border-gray-200">
-                  <h3 className="text-lg font-medium text-gray-900">
-                    Available Sizes - {selectedSet.displayName}
-                  </h3>
-                </div>
+              
                 <div className="overflow-x-auto">
                   <table className="min-w-full divide-y divide-gray-200">
                     <thead className="bg-gray-50">
                       <tr>
                         <th
                           scope="col"
-                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                          className="px-2 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center "
                         >
                           Size Label
                         </th>
@@ -711,7 +707,7 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
                           <th
                             key={size.id}
                             scope="col"
-                            className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                            className="px-2 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center"
                           >
                             {size.size_label}
                           </th>
@@ -720,39 +716,39 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
                       <tr>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                          Width (mm)
+                        <td className="px-2 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-center">
+                          Width
                         </td>
                         {allSizes.map((size) => (
                           <td
                             key={size.id}
-                            className="px-6 py-4 whitespace-nowrap text-sm text-gray-500"
+                            className="px-2 py-4 whitespace-nowrap text-sm text-gray-500 text-center"
                           >
                             {size.width}
                           </td>
                         ))}
                       </tr>
                       <tr>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                          Length (mm)
+                        <td className="px-2 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-center">
+                          Length
                         </td>
                         {allSizes.map((size) => (
                           <td
                             key={size.id}
-                            className="px-6 py-4 whitespace-nowrap text-sm text-gray-500"
+                            className="px-2 py-4 whitespace-nowrap text-sm text-gray-500 text-center"
                           >
                             {size.length}
                           </td>
                         ))}
                       </tr>
                       <tr>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                        <td className="px-2 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-center">
                           IC
                         </td>
                         {allSizes.map((size) => (
                           <td
                             key={size.id}
-                            className="px-6 py-4 whitespace-nowrap text-sm text-gray-500"
+                            className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center"
                           >
                             {size.inner_curve || "-"}
                           </td>

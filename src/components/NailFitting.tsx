@@ -68,8 +68,10 @@ const DEFAULT_MEASUREMENTS: FingerMeasurement[] = [
   { finger_position: "Right Pinky", nail_bed_width: 0 },
 ];
 
-export function NailFitting({ clientId }: NailFittingProps) {
+export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
   const [measurements, setMeasurements] =
+    useState<FingerMeasurement[]>(DEFAULT_MEASUREMENTS);
+  const [originalMeasurements, setOriginalMeasurements] =
     useState<FingerMeasurement[]>(DEFAULT_MEASUREMENTS);
   const [nailSets, setNailSets] = useState<NailSetDisplay[]>([]);
   const [selectedSet, setSelectedSet] = useState<NailSetDisplay | null>(null);
@@ -87,6 +89,10 @@ export function NailFitting({ clientId }: NailFittingProps) {
   });
   const [shakeError, setShakeError] = useState(false);
   const [isSelectClientModalOpen, setIsSelectClientModalOpen] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [selectedClientId, setSelectedClientId] = useState<number | null>(
+    initialClientId || null
+  );
 
   useEffect(() => {
     async function init() {
@@ -94,7 +100,7 @@ export function NailFitting({ clientId }: NailFittingProps) {
         // Ensure we're authenticated before making any database calls
         await ensureAuthenticated();
         await loadNailSets();
-        if (clientId) {
+        if (selectedClientId) {
           await loadSavedMeasurements();
         }
       } catch (error) {
@@ -102,7 +108,7 @@ export function NailFitting({ clientId }: NailFittingProps) {
       }
     }
     init();
-  }, [clientId]);
+  }, [selectedClientId]);
 
   async function loadNailSets() {
     try {
@@ -135,7 +141,7 @@ export function NailFitting({ clientId }: NailFittingProps) {
         "Measurements",
         undefined,
         {
-          eq: { column: "client_id", value: clientId },
+          eq: { column: "client_id", value: selectedClientId },
           order: { column: "date_measured", ascending: false },
         }
       );
@@ -170,6 +176,7 @@ export function NailFitting({ clientId }: NailFittingProps) {
           );
 
           setMeasurements(sortedMeasurements);
+          setOriginalMeasurements(sortedMeasurements); // Store original measurements
 
           // If there's a nail tip set associated, select it
           if (mostRecentSet[0].nail_tip_set_id) {
@@ -205,40 +212,22 @@ export function NailFitting({ clientId }: NailFittingProps) {
   async function handleSaveClick() {
     if (!clientInfo.name.trim()) {
       setShakeError(true);
-      // Reset shake after animation completes
-      setTimeout(() => setShakeError(false), 820); // 800ms animation + 20ms buffer
+      setTimeout(() => setShakeError(false), 820);
       return;
     }
 
     try {
       setSaveStatus("saving");
-
-      // Ensure we're authenticated before saving
       await ensureAuthenticated();
 
-      // Debug: Log user information
       const {
         data: { user },
         error: userError,
       } = await supabase.auth.getUser();
 
-      if (userError) {
-        console.error("User error:", userError);
-        throw new Error("Error getting user");
+      if (userError || !user) {
+        throw new Error(userError?.message || "No authenticated user found");
       }
-
-      if (!user) {
-        console.error("No user found");
-        throw new Error("No authenticated user found");
-      }
-
-      console.log("Current user details:", {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        created_at: user.created_at,
-        updated_at: user.updated_at,
-      });
 
       // Check user credits
       const { data: userCredits, error: creditsError } = await supabase
@@ -246,20 +235,6 @@ export function NailFitting({ clientId }: NailFittingProps) {
         .select("credits, is_admin")
         .eq("user_id", user.id)
         .single();
-
-      // Enhanced credit info logging
-      console.log("💳 User Credits Status:", {
-        available: userCredits?.credits ?? 0,
-        isAdmin: userCredits?.is_admin ?? false,
-        userId: user.id,
-        timestamp: new Date().toISOString(),
-        error: creditsError
-          ? {
-              message: creditsError.message,
-              code: creditsError.code,
-            }
-          : null,
-      });
 
       if (creditsError) {
         console.error("Error fetching user credits:", creditsError);
@@ -269,50 +244,152 @@ export function NailFitting({ clientId }: NailFittingProps) {
         throw new Error("Insufficient credits");
       }
 
-      // First, save client information to Clients table
-      const [clientRecord] = (await insertData("Clients", {
-        name: clientInfo.name,
-        notes: clientInfo.notes || null,
-        nail_tech_id: user.id,
-      })) as Client[];
+      // Create new client
+      const { data: newClient, error: clientError } = await supabase
+        .from("Clients")
+        .insert({
+          name: clientInfo.name,
+          notes: clientInfo.notes || null,
+          nail_tech_id: user.id,
+        })
+        .select()
+        .single();
 
-      if (!clientRecord || !clientRecord.id) {
+      if (clientError || !newClient) {
         throw new Error("Failed to create client record");
       }
 
-      // Then save measurements with the client ID
-      const timestamp = new Date().toISOString();
-      await Promise.all(
-        measurements.map((measurement) =>
-          insertData("Measurements", {
-            finger_position: measurement.finger_position,
-            nail_bed_width: measurement.nail_bed_width,
-            nail_bed_curve: measurement.nail_bed_curve,
-            nail_tip_set_id: selectedSet?.id,
-            date_measured: timestamp,
-            client_id: clientRecord.id,
-          })
-        )
-      );
+      // Save measurements for new client
+      const validMeasurements = measurements
+        .filter((measurement) => measurement.nail_bed_width > 0)
+        .map((measurement) => ({
+          finger_position: measurement.finger_position,
+          nail_bed_width: Number(measurement.nail_bed_width) || 0,
+          nail_bed_curve: measurement.nail_bed_curve
+            ? Number(measurement.nail_bed_curve)
+            : null,
+          date_measured: new Date().toISOString(),
+          client_id: newClient.id,
+        }));
+
+      if (validMeasurements.length === 0) {
+        throw new Error("No valid measurements to save");
+      }
+
+      const { error: measurementsError } = await supabase
+        .from("Measurements")
+        .insert(validMeasurements);
+
+      if (measurementsError) {
+        console.error("Measurements error:", measurementsError);
+        throw new Error("Failed to save measurements");
+      }
 
       // Deduct credit if not admin
       if (!userCredits.is_admin) {
         await supabase
           .from("User Credits")
           .update({ credits: userCredits.credits - 1 })
-          .eq("user_id", (await supabase.auth.getUser()).data.user?.id);
+          .eq("user_id", user.id);
       }
 
       setSaveStatus("saved");
-      // Reset client info
       setClientInfo({
         name: "",
         notes: "",
       });
-      // Reset status after 3 seconds
       setTimeout(() => setSaveStatus("idle"), 3000);
     } catch (error) {
       console.error("Error saving:", error);
+      setSaveStatus("error");
+      setTimeout(() => setSaveStatus("idle"), 3000);
+    }
+  }
+
+  async function handleUpdateClick() {
+    if (!selectedClientId) {
+      console.error("No client ID available for update");
+      setSaveStatus("error");
+      setTimeout(() => setSaveStatus("idle"), 3000);
+      return;
+    }
+
+    try {
+      setSaveStatus("saving");
+      await ensureAuthenticated();
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        throw new Error(userError?.message || "No authenticated user found");
+      }
+
+      // Check user credits
+      const { data: userCredits, error: creditsError } = await supabase
+        .from("User Credits")
+        .select("credits, is_admin")
+        .eq("user_id", user.id)
+        .single();
+
+      if (creditsError) {
+        console.error("Error fetching user credits:", creditsError);
+      }
+
+      if (!userCredits || (!userCredits.is_admin && userCredits.credits <= 0)) {
+        throw new Error("Insufficient credits");
+      }
+
+      // Delete existing measurements
+      const { error: deleteError } = await supabase
+        .from("Measurements")
+        .delete()
+        .eq("client_id", selectedClientId);
+
+      if (deleteError) {
+        throw new Error("Failed to delete old measurements");
+      }
+
+      // Save new measurements
+      const validMeasurements = measurements
+        .filter((measurement) => measurement.nail_bed_width > 0)
+        .map((measurement) => ({
+          finger_position: measurement.finger_position,
+          nail_bed_width: Number(measurement.nail_bed_width) || 0,
+          nail_bed_curve: measurement.nail_bed_curve
+            ? Number(measurement.nail_bed_curve)
+            : null,
+          date_measured: new Date().toISOString(),
+          client_id: selectedClientId,
+        }));
+
+      if (validMeasurements.length === 0) {
+        throw new Error("No valid measurements to save");
+      }
+
+      const { error: measurementsError } = await supabase
+        .from("Measurements")
+        .insert(validMeasurements);
+
+      if (measurementsError) {
+        console.error("Measurements error:", measurementsError);
+        throw new Error("Failed to save measurements");
+      }
+
+      // Deduct credit if not admin
+      if (!userCredits.is_admin) {
+        await supabase
+          .from("User Credits")
+          .update({ credits: userCredits.credits - 1 })
+          .eq("user_id", user.id);
+      }
+
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus("idle"), 3000);
+    } catch (error) {
+      console.error("Error updating:", error);
       setSaveStatus("error");
       setTimeout(() => setSaveStatus("idle"), 3000);
     }
@@ -353,17 +430,14 @@ export function NailFitting({ clientId }: NailFittingProps) {
             ? measurement.nail_bed_width + 0.5
             : measurement.nail_bed_width;
 
-          // Find the closest size to our target width
-          let validWidthSizes = sizes.map((size) => ({
-            ...size,
-            distance: Math.abs(size.width - targetWidth),
-          }));
+          // Find sizes that are smaller than or equal to the target width
+          let validWidthSizes = sizes.filter(
+            (size) => size.width <= targetWidth
+          );
 
           if (validWidthSizes.length > 0) {
-            // Sort by distance from target width
-            validWidthSizes = validWidthSizes.sort(
-              (a, b) => a.distance - b.distance
-            );
+            // Sort by width in descending order to get the largest valid size
+            validWidthSizes = validWidthSizes.sort((a, b) => b.width - a.width);
 
             // Get all sizes that have the same width as the best match
             const bestWidth = validWidthSizes[0].width;
@@ -411,6 +485,9 @@ export function NailFitting({ clientId }: NailFittingProps) {
   async function handleClientSelect(selectedClientId: number) {
     try {
       setLoading(true);
+      setIsUpdating(true);
+      setSelectedClientId(selectedClientId);
+
       // Fetch client info
       const [client] = await fetchData<Client>(
         "Clients",
@@ -463,6 +540,7 @@ export function NailFitting({ clientId }: NailFittingProps) {
           );
 
           setMeasurements(sortedMeasurements);
+          setOriginalMeasurements(sortedMeasurements); // Store original measurements
 
           // If there's a nail tip set associated, select it
           if (mostRecentSet[0].nail_tip_set_id) {
@@ -481,6 +559,27 @@ export function NailFitting({ clientId }: NailFittingProps) {
       setLoading(false);
     }
   }
+
+  // Add function to check if measurements have changed
+  const hasMeasurementsChanged = () => {
+    return measurements.some((measurement, index) => {
+      const original = originalMeasurements[index];
+      return (
+        measurement.nail_bed_width !== original.nail_bed_width ||
+        measurement.nail_bed_curve !== original.nail_bed_curve
+      );
+    });
+  };
+
+  // Add function to check if any measurements have been entered
+  const hasAnyMeasurements = () => {
+    return measurements.some(
+      (measurement) =>
+        measurement.nail_bed_width > 0 ||
+        (measurement.nail_bed_curve !== undefined &&
+          measurement.nail_bed_curve > 0)
+    );
+  };
 
   return (
     <div className="w-full h-full min-h-full flex flex-col">
@@ -715,7 +814,7 @@ export function NailFitting({ clientId }: NailFittingProps) {
                             ?.length ? (
                             <div className="text-base text-gray-700 text-center">
                               <div className="font-bold text-lg mb-2">
-                                Curve
+                                Size
                                 {(matchedSizes[measurement.finger_position]
                                   ?.curve?.length ?? 0) > 1
                                   ? "s"
@@ -902,7 +1001,7 @@ export function NailFitting({ clientId }: NailFittingProps) {
                           ?.length ? (
                           <div className="text-base text-gray-700 text-center">
                             <div className="font-bold text-lg mb-2">
-                              Curve
+                              Size
                               {(matchedSizes[measurement.finger_position]?.curve
                                 ?.length ?? 0) > 1
                                 ? "s"
@@ -1019,13 +1118,29 @@ export function NailFitting({ clientId }: NailFittingProps) {
           )}
           <button
             type="button"
-            onClick={handleSaveClick}
+            onClick={isUpdating ? handleUpdateClick : handleSaveClick}
             disabled={
-              !clientInfo.name.trim() || loading || saveStatus === "saving"
+              !clientInfo.name.trim() ||
+              loading ||
+              saveStatus === "saving" ||
+              (isUpdating && !hasMeasurementsChanged()) ||
+              (!isUpdating && !hasAnyMeasurements())
             }
-            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-gray-600 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+            className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white ${
+              !clientInfo.name.trim() ||
+              loading ||
+              saveStatus === "saving" ||
+              (isUpdating && !hasMeasurementsChanged()) ||
+              (!isUpdating && !hasAnyMeasurements())
+                ? "bg-gray-400 cursor-not-allowed"
+                : "bg-gray-600 hover:bg-gray-700"
+            } focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500`}
           >
-            {saveStatus === "saving" ? "Saving..." : "Save Measurements"}
+            {saveStatus === "saving"
+              ? "Saving..."
+              : isUpdating
+              ? "Update Measurements"
+              : "Save Measurements"}
           </button>
         </div>
 

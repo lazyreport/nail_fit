@@ -45,8 +45,6 @@ interface MatchedSizes {
   width?: NailTipSize[];
   curve?: NailTipSize[];
   availableSizes?: NailTipSize[];
-  hasTipCurvature?: boolean;
-  hasUserCurvature?: boolean;
 }
 
 interface NailSetDisplay extends NailTipSet {
@@ -82,6 +80,7 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
   const [matchedSizes, setMatchedSizes] = useState<
     Record<string, MatchedSizes>
   >({});
+  const [allSizes, setAllSizes] = useState<NailTipSize[]>([]);
   const [loading, setLoading] = useState(false);
   const [saveStatus, setSaveStatus] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -96,8 +95,8 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
   const [selectedClientId, setSelectedClientId] = useState<number | null>(
     initialClientId || null
   );
-  const [preferSmallerSizes, setPreferSmallerSizes] = useState(false);
-  const [useTaperedCompensation, setUseTaperedCompensation] = useState(false);
+  const [preferSmallerSizes, setPreferSmallerSizes] = useState(true);
+  const [useTaperedCompensation, setUseTaperedCompensation] = useState(true);
 
   useEffect(() => {
     async function init() {
@@ -114,6 +113,27 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
     }
     init();
   }, [selectedClientId]);
+
+  useEffect(() => {
+    async function loadSizes() {
+      if (!selectedSet) {
+        setAllSizes([]);
+        return;
+      }
+
+      try {
+        const sizes = await fetchData<NailTipSize>(
+          "Nail Tip Sizes",
+          `tip_set_id = ${selectedSet.id}`
+        );
+        setAllSizes(sizes.sort((a, b) => b.width - a.width));
+      } catch (error) {
+        console.error("Error loading sizes:", error);
+      }
+    }
+
+    loadSizes();
+  }, [selectedSet]);
 
   async function loadNailSets() {
     try {
@@ -408,71 +428,6 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
           set.displayName.toLowerCase().includes(query.toLowerCase())
         );
 
-  // Helper functions for finding fits
-  function findComfortFit(sizes: NailTipSize[], targetWidth: number) {
-    // Sort all sizes by how close they are to target width
-    return [...sizes].sort((a, b) => {
-      const aDiff = Math.abs(a.width - targetWidth);
-      const bDiff = Math.abs(b.width - targetWidth);
-
-      // If differences are equal, prefer the smaller size
-      if (Math.abs(aDiff - bDiff) < 0.1) {
-        return a.width - b.width;
-      }
-
-      return aDiff - bDiff;
-    })[0];
-  }
-
-  function findTightFit(
-    sizes: NailTipSize[],
-    targetWidth: number,
-    targetCurve?: number
-  ) {
-    if (targetCurve) {
-      // Find size with closest curve match
-      return [...sizes].sort((a, b) => {
-        const aDiff = a.inner_curve
-          ? Math.abs(a.inner_curve - targetCurve)
-          : Infinity;
-        const bDiff = b.inner_curve
-          ? Math.abs(b.inner_curve - targetCurve)
-          : Infinity;
-        return aDiff - bDiff;
-      })[0];
-    }
-    // If no curve, find closest size <= target width
-    const sortedSizes = [...sizes].sort((a, b) => b.width - a.width);
-    return sortedSizes.find((s) => s.width <= targetWidth) || sortedSizes[0];
-  }
-
-  function findPerfectFit(
-    sizes: NailTipSize[],
-    comfortFit: NailTipSize,
-    tightFit: NailTipSize
-  ) {
-    const comfortSize = parseFloat(comfortFit.size_label);
-    const tightSize = parseFloat(tightFit.size_label);
-
-    if (comfortSize === tightSize) return comfortFit;
-
-    // Find sizes between comfort and tight
-    const min = Math.min(comfortSize, tightSize);
-    const max = Math.max(comfortSize, tightSize);
-    const inBetweenSizes = sizes.filter((s) => {
-      const size = parseFloat(s.size_label);
-      return size > min && size < max;
-    });
-
-    if (inBetweenSizes.length > 0) {
-      // Pick the middle size
-      return inBetweenSizes[Math.floor(inBetweenSizes.length / 2)];
-    }
-
-    // If no in-between sizes, pick the smaller one
-    return comfortSize < tightSize ? comfortFit : tightFit;
-  }
-
   async function findMatchingSizes() {
     if (!selectedSet) return;
 
@@ -489,31 +444,60 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
         selectedSet.shape.toLowerCase().includes("stilleto");
 
       measurements.forEach((measurement) => {
+        const matchResult: MatchedSizes = {
+          availableSizes: sizes,
+        };
+
         if (measurement.nail_bed_width > 0) {
           const targetWidth =
             isTaperedShape && useTaperedCompensation
               ? measurement.nail_bed_width + 0.5
               : measurement.nail_bed_width;
 
-          const comfortFit = findComfortFit(sizes, targetWidth);
+          // Calculate scores for each size based on both width and curve
+          const sizesWithScores = sizes.map((size) => {
+            const widthDiff = Math.abs(size.width - targetWidth);
+            const curveDiff = measurement.nail_bed_curve
+              ? Math.abs((size.inner_curve || 0) - measurement.nail_bed_curve)
+              : 0;
 
-          // Only find tight and perfect fits if we have valid curvature data
-          const hasCurvatureData =
-            sizes.some((s) => s.inner_curve) && measurement.nail_bed_curve;
-          const tightFit = hasCurvatureData
-            ? findTightFit(sizes, targetWidth, measurement.nail_bed_curve)
-            : null;
-          const perfectFit =
-            hasCurvatureData && tightFit
-              ? findPerfectFit(sizes, comfortFit, tightFit)
-              : null;
+            // Combined score weighs both width and curve equally
+            const score =
+              widthDiff + (measurement.nail_bed_curve ? curveDiff : 0);
 
+            return {
+              ...size,
+              score,
+              widthDiff,
+              curveDiff,
+            };
+          });
+
+          // Sort by combined score
+          sizesWithScores.sort((a, b) => a.score - b.score);
+
+          // Find comfort fit (slightly larger width)
+          const comfortFit = sizesWithScores.find(
+            (size) => size.width >= targetWidth
+          );
+
+          // Find tight fit (slightly smaller width)
+          const tightFit = sizesWithScores.find(
+            (size) => size.width <= targetWidth
+          );
+
+          // Perfect fit is the size with the best overall score
+          const perfectFit = sizesWithScores[0];
+
+          matchResult.width = tightFit ? [tightFit] : undefined;
+          matchResult.curve = comfortFit ? [comfortFit] : undefined;
+
+          // Store the matches
           matches[measurement.finger_position] = {
-            width: comfortFit ? [comfortFit] : undefined,
-            curve: tightFit ? [tightFit] : undefined,
-            availableSizes: perfectFit ? [perfectFit] : undefined,
-            hasTipCurvature: sizes.some((s) => s.inner_curve),
-            hasUserCurvature: !!measurement.nail_bed_curve,
+            ...matchResult,
+            width: tightFit ? [tightFit] : undefined,
+            curve: comfortFit ? [comfortFit] : undefined,
+            availableSizes: [perfectFit],
           };
         }
       });
@@ -625,98 +609,6 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
     );
   };
 
-  // In the display component, we just use the pre-calculated values
-  const DisplaySizeMatches = ({
-    measurement,
-  }: {
-    measurement: FingerMeasurement;
-  }) => {
-    const matches = matchedSizes[measurement.finger_position];
-    if (!matches) return null;
-
-    const comfortFit = matches.width?.[0];
-    const tightFit = matches.curve?.[0];
-    const perfectFit = matches.availableSizes?.[0];
-
-    const getCurvatureMessage = () => {
-      const messages = [];
-      if (!matches.hasTipCurvature) {
-        messages.push(
-          "Following product does not provide inner curvature information"
-        );
-      }
-      if (!matches.hasUserCurvature) {
-        messages.push("This user's curvature measurement is missing");
-      }
-      return messages.join("\n");
-    };
-
-    return (
-      <>
-        {comfortFit && (
-          <div className="bg-blue-50 rounded p-1 text-center">
-            <div className="text-[10px] font-medium text-blue-900 group relative cursor-help">
-              Comfort: {comfortFit.size_label}
-              <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-8 left-1/2 transform -translate-x-1/2 w-max">
-                Width: {comfortFit.width}mm
-                <br />
-                Curve: {comfortFit.inner_curve || "N/A"}mm
-              </div>
-            </div>
-          </div>
-        )}
-        <div
-          className={`rounded p-1 text-center ${
-            perfectFit ? "bg-green-50 ring-1 ring-green-500" : "bg-gray-100"
-          }`}
-        >
-          <div
-            className={`text-[10px] font-medium group relative cursor-help ${
-              perfectFit ? "text-green-900" : "text-gray-400"
-            }`}
-          >
-            Perfect: {perfectFit ? perfectFit.size_label : "N/A"}
-            <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-8 left-1/2 transform -translate-x-1/2 w-max whitespace-pre-line">
-              {perfectFit ? (
-                <>
-                  Width: {perfectFit.width}mm
-                  <br />
-                  Curve: {perfectFit.inner_curve || "N/A"}mm
-                </>
-              ) : (
-                getCurvatureMessage()
-              )}
-            </div>
-          </div>
-        </div>
-        <div
-          className={`rounded p-1 text-center ${
-            tightFit ? "bg-purple-50" : "bg-gray-100"
-          }`}
-        >
-          <div
-            className={`text-[10px] font-medium group relative cursor-help ${
-              tightFit ? "text-purple-900" : "text-gray-400"
-            }`}
-          >
-            Tight: {tightFit ? tightFit.size_label : "N/A"}
-            <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-8 left-1/2 transform -translate-x-1/2 w-max whitespace-pre-line">
-              {tightFit ? (
-                <>
-                  Width: {tightFit.width}mm
-                  <br />
-                  Curve: {tightFit.inner_curve || "N/A"}mm
-                </>
-              ) : (
-                getCurvatureMessage()
-              )}
-            </div>
-          </div>
-        </div>
-      </>
-    );
-  };
-
   return (
     <div className="w-full h-full min-h-full flex flex-col">
       <style>{`
@@ -760,20 +652,29 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
                         />
                       </Combobox.Button>
                     </div>
+
                     <Combobox.Options className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm">
-                      {filteredNailSets.map((set) => (
-                        <Combobox.Option
-                          key={set.id}
-                          value={set}
-                          className={({ active }) =>
-                            `relative cursor-default select-none py-2 pl-3 pr-9 ${
-                              active ? "bg-gray-100" : "text-gray-900"
-                            }`
-                          }
-                        >
-                          {set.displayName}
-                        </Combobox.Option>
-                      ))}
+                      {filteredNailSets.length === 0 && query !== "" ? (
+                        <div className="relative cursor-default select-none py-2 px-4 text-gray-700">
+                          Nothing found.
+                        </div>
+                      ) : (
+                        filteredNailSets.map((set) => (
+                          <Combobox.Option
+                            key={set.id}
+                            className={({ active }) =>
+                              `relative cursor-default select-none py-2 pl-3 pr-9 ${
+                                active
+                                  ? "bg-gray-100 text-gray-900"
+                                  : "text-gray-900"
+                              }`
+                            }
+                            value={set}
+                          >
+                            {set.displayName}
+                          </Combobox.Option>
+                        ))
+                      )}
                     </Combobox.Options>
                   </div>
                 </Combobox>
@@ -787,6 +688,81 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
                 {loading ? "Finding matches..." : "Size"}
               </button>
             </div>
+
+            {/* Size Table */}
+            {selectedSet && (
+              <div className="mt-4 bg-white rounded-lg shadow overflow-hidden">
+                <div className="px-4 py-3 border-b border-gray-200">
+                  <h3 className="text-lg font-medium text-gray-900">
+                    Available Sizes - {selectedSet.displayName}
+                  </h3>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th
+                          scope="col"
+                          className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        >
+                          Size Label
+                        </th>
+                        {allSizes.map((size) => (
+                          <th
+                            key={size.id}
+                            scope="col"
+                            className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                          >
+                            {size.size_label}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      <tr>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          Width (mm)
+                        </td>
+                        {allSizes.map((size) => (
+                          <td
+                            key={size.id}
+                            className="px-6 py-4 whitespace-nowrap text-sm text-gray-500"
+                          >
+                            {size.width}
+                          </td>
+                        ))}
+                      </tr>
+                      <tr>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          Length (mm)
+                        </td>
+                        {allSizes.map((size) => (
+                          <td
+                            key={size.id}
+                            className="px-6 py-4 whitespace-nowrap text-sm text-gray-500"
+                          >
+                            {size.length}
+                          </td>
+                        ))}
+                      </tr>
+                      <tr>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          IC
+                        </td>
+                        {allSizes.map((size) => (
+                          <td
+                            key={size.id}
+                            className="px-6 py-4 whitespace-nowrap text-sm text-gray-500"
+                          >
+                            {size.inner_curve || "-"}
+                          </td>
+                        ))}
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {/* Width Matching Strategy Toggle */}
             <div className="flex items-center">
@@ -906,7 +882,103 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
                       {Object.keys(matchedSizes).length > 0 &&
                         measurement.nail_bed_width > 0 && (
                           <div className="mt-4 w-full space-y-2">
-                            <DisplaySizeMatches measurement={measurement} />
+                            {(() => {
+                              const matches =
+                                matchedSizes[measurement.finger_position];
+                              if (!matches) return null;
+
+                              const comfortFit = matches.width?.[0];
+                              const tightFit = matches.curve?.[0];
+                              let perfectFit = comfortFit;
+
+                              if (
+                                comfortFit &&
+                                tightFit &&
+                                matches.availableSizes
+                              ) {
+                                const comfortSize = parseFloat(
+                                  comfortFit.size_label
+                                );
+                                const tightSize = parseFloat(
+                                  tightFit.size_label
+                                );
+                                if (comfortSize === tightSize) {
+                                  perfectFit = comfortFit;
+                                } else {
+                                  const perfectSize =
+                                    (comfortSize + tightSize) / 2;
+                                  perfectFit =
+                                    matches.availableSizes.find(
+                                      (s) =>
+                                        parseFloat(s.size_label) === perfectSize
+                                    ) || comfortFit;
+                                }
+                              }
+
+                              return (
+                                <>
+                                  {comfortFit && (
+                                    <div
+                                      className="bg-blue-50 rounded p-1 text-center group relative"
+                                      title={`Width: ${
+                                        comfortFit.width
+                                      }mm\nCurve: ${
+                                        comfortFit.inner_curve || "N/A"
+                                      }mm`}
+                                    >
+                                      <div className="text-[10px] font-medium text-blue-900">
+                                        Comfort: {comfortFit.size_label}
+                                      </div>
+                                      <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-12 left-1/2 transform -translate-x-1/2 w-max">
+                                        Width: {comfortFit.width}mm
+                                        <br />
+                                        Curve: {comfortFit.inner_curve || "N/A"}
+                                        mm
+                                      </div>
+                                    </div>
+                                  )}
+                                  {perfectFit && (
+                                    <div
+                                      className="bg-green-50 rounded p-1 text-center ring-1 ring-green-500 group relative"
+                                      title={`Width: ${
+                                        perfectFit.width
+                                      }mm\nCurve: ${
+                                        perfectFit.inner_curve || "N/A"
+                                      }mm`}
+                                    >
+                                      <div className="text-[10px] font-medium text-green-900">
+                                        Perfect: {perfectFit.size_label}
+                                      </div>
+                                      <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-12 left-1/2 transform -translate-x-1/2 w-max">
+                                        Width: {perfectFit.width}mm
+                                        <br />
+                                        Curve: {perfectFit.inner_curve || "N/A"}
+                                        mm
+                                      </div>
+                                    </div>
+                                  )}
+                                  {tightFit && (
+                                    <div
+                                      className="bg-purple-50 rounded p-1 text-center group relative"
+                                      title={`Width: ${
+                                        tightFit.width
+                                      }mm\nCurve: ${
+                                        tightFit.inner_curve || "N/A"
+                                      }mm`}
+                                    >
+                                      <div className="text-[10px] font-medium text-purple-900">
+                                        Tight: {tightFit.size_label}
+                                      </div>
+                                      <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-12 left-1/2 transform -translate-x-1/2 w-max">
+                                        Width: {tightFit.width}mm
+                                        <br />
+                                        Curve: {tightFit.inner_curve || "N/A"}mm
+                                      </div>
+                                    </div>
+                                  )}
+                                </>
+                              );
+                            })()}
                           </div>
                         )}
                     </div>
@@ -1010,7 +1082,99 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
                     {Object.keys(matchedSizes).length > 0 &&
                       measurement.nail_bed_width > 0 && (
                         <div className="mt-4 w-full space-y-2">
-                          <DisplaySizeMatches measurement={measurement} />
+                          {(() => {
+                            const matches =
+                              matchedSizes[measurement.finger_position];
+                            if (!matches) return null;
+
+                            const comfortFit = matches.width?.[0];
+                            const tightFit = matches.curve?.[0];
+                            let perfectFit = comfortFit;
+
+                            if (
+                              comfortFit &&
+                              tightFit &&
+                              matches.availableSizes
+                            ) {
+                              const comfortSize = parseFloat(
+                                comfortFit.size_label
+                              );
+                              const tightSize = parseFloat(tightFit.size_label);
+                              if (comfortSize === tightSize) {
+                                perfectFit = comfortFit;
+                              } else {
+                                const perfectSize =
+                                  (comfortSize + tightSize) / 2;
+                                perfectFit =
+                                  matches.availableSizes.find(
+                                    (s) =>
+                                      parseFloat(s.size_label) === perfectSize
+                                  ) || comfortFit;
+                              }
+                            }
+
+                            return (
+                              <>
+                                {comfortFit && (
+                                  <div
+                                    className="bg-blue-50 rounded p-1 text-center group relative"
+                                    title={`Width: ${
+                                      comfortFit.width
+                                    }mm\nCurve: ${
+                                      comfortFit.inner_curve || "N/A"
+                                    }mm`}
+                                  >
+                                    <div className="text-[10px] font-medium text-blue-900">
+                                      Comfort: {comfortFit.size_label}
+                                    </div>
+                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-12 left-1/2 transform -translate-x-1/2 w-max">
+                                      Width: {comfortFit.width}mm
+                                      <br />
+                                      Curve: {comfortFit.inner_curve || "N/A"}mm
+                                    </div>
+                                  </div>
+                                )}
+                                {perfectFit && (
+                                  <div
+                                    className="bg-green-50 rounded p-1 text-center ring-1 ring-green-500 group relative"
+                                    title={`Width: ${
+                                      perfectFit.width
+                                    }mm\nCurve: ${
+                                      perfectFit.inner_curve || "N/A"
+                                    }mm`}
+                                  >
+                                    <div className="text-[10px] font-medium text-green-900">
+                                      Perfect: {perfectFit.size_label}
+                                    </div>
+                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-12 left-1/2 transform -translate-x-1/2 w-max">
+                                      Width: {perfectFit.width}mm
+                                      <br />
+                                      Curve: {perfectFit.inner_curve || "N/A"}mm
+                                    </div>
+                                  </div>
+                                )}
+                                {tightFit && (
+                                  <div
+                                    className="bg-purple-50 rounded p-1 text-center group relative"
+                                    title={`Width: ${
+                                      tightFit.width
+                                    }mm\nCurve: ${
+                                      tightFit.inner_curve || "N/A"
+                                    }mm`}
+                                  >
+                                    <div className="text-[10px] font-medium text-purple-900">
+                                      Tight: {tightFit.size_label}
+                                    </div>
+                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-12 left-1/2 transform -translate-x-1/2 w-max">
+                                      Width: {tightFit.width}mm
+                                      <br />
+                                      Curve: {tightFit.inner_curve || "N/A"}mm
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
                         </div>
                       )}
                   </div>

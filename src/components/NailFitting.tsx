@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { fetchData, insertData } from "../lib/database";
+import { fetchData } from "../lib/database";
 import { ensureAuthenticated } from "../lib/supabase";
 import { supabase } from "../lib/supabase";
 import {
@@ -44,6 +44,7 @@ interface NailFittingProps {
 interface MatchedSizes {
   width?: NailTipSize[];
   curve?: NailTipSize[];
+  availableSizes?: NailTipSize[];
 }
 
 interface NailSetDisplay extends NailTipSet {
@@ -405,116 +406,107 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
           set.displayName.toLowerCase().includes(query.toLowerCase())
         );
 
+  // Helper functions for finding fits
+  function findComfortFit(sizes: NailTipSize[], targetWidth: number) {
+    // Sort all sizes by how close they are to target width
+    return [...sizes].sort((a, b) => {
+      const aDiff = Math.abs(a.width - targetWidth);
+      const bDiff = Math.abs(b.width - targetWidth);
+
+      // If differences are equal, prefer the smaller size
+      if (Math.abs(aDiff - bDiff) < 0.1) {
+        return a.width - b.width;
+      }
+
+      return aDiff - bDiff;
+    })[0];
+  }
+
+  function findTightFit(
+    sizes: NailTipSize[],
+    targetWidth: number,
+    targetCurve?: number
+  ) {
+    if (targetCurve) {
+      // Find size with closest curve match
+      return [...sizes].sort((a, b) => {
+        const aDiff = a.inner_curve
+          ? Math.abs(a.inner_curve - targetCurve)
+          : Infinity;
+        const bDiff = b.inner_curve
+          ? Math.abs(b.inner_curve - targetCurve)
+          : Infinity;
+        return aDiff - bDiff;
+      })[0];
+    }
+    // If no curve, find closest size <= target width
+    const sortedSizes = [...sizes].sort((a, b) => b.width - a.width);
+    return sortedSizes.find((s) => s.width <= targetWidth) || sortedSizes[0];
+  }
+
+  function findPerfectFit(
+    sizes: NailTipSize[],
+    comfortFit: NailTipSize,
+    tightFit: NailTipSize
+  ) {
+    const comfortSize = parseFloat(comfortFit.size_label);
+    const tightSize = parseFloat(tightFit.size_label);
+
+    if (comfortSize === tightSize) return comfortFit;
+
+    // Find sizes between comfort and tight
+    const min = Math.min(comfortSize, tightSize);
+    const max = Math.max(comfortSize, tightSize);
+    const inBetweenSizes = sizes.filter((s) => {
+      const size = parseFloat(s.size_label);
+      return size > min && size < max;
+    });
+
+    if (inBetweenSizes.length > 0) {
+      // Pick the middle size
+      return inBetweenSizes[Math.floor(inBetweenSizes.length / 2)];
+    }
+
+    // If no in-between sizes, pick the smaller one
+    return comfortSize < tightSize ? comfortFit : tightFit;
+  }
+
   async function findMatchingSizes() {
     if (!selectedSet) return;
 
     try {
       setLoading(true);
-      // Fetch sizes for selected set
       const sizes = await fetchData<NailTipSize>(
         "Nail Tip Sizes",
         `tip_set_id = ${selectedSet.id}`
       );
 
-      // Match sizes for each finger
       const matches: Record<string, MatchedSizes> = {};
       const isTaperedShape =
         selectedSet.shape.toLowerCase().includes("almond") ||
         selectedSet.shape.toLowerCase().includes("stilleto");
 
       measurements.forEach((measurement) => {
-        const matchResult: MatchedSizes = {};
-
-        // Find width match
         if (measurement.nail_bed_width > 0) {
           const targetWidth =
             isTaperedShape && useTaperedCompensation
               ? measurement.nail_bed_width + 0.5
               : measurement.nail_bed_width;
 
-          let validWidthSizes: NailTipSize[] = [];
+          const comfortFit = findComfortFit(sizes, targetWidth);
+          const tightFit = findTightFit(
+            sizes,
+            targetWidth,
+            measurement.nail_bed_curve
+          );
+          const perfectFit = findPerfectFit(sizes, comfortFit, tightFit);
 
-          if (preferSmallerSizes) {
-            // Strategy 1: Prefer smaller sizes
-            validWidthSizes = sizes.filter((size) => size.width <= targetWidth);
-
-            if (validWidthSizes.length > 0) {
-              // Sort by width in descending order to get the largest valid size
-              validWidthSizes.sort((a, b) => b.width - a.width);
-
-              // Get all sizes that have the same width as the best match
-              const bestWidth = validWidthSizes[0].width;
-              matchResult.width = validWidthSizes.filter(
-                (size) => size.width === bestWidth
-              );
-            }
-          } else {
-            // Strategy 2: Find closest match
-            // Calculate absolute difference from target for each size
-            const sizesWithDiff = sizes.map((size) => ({
-              ...size,
-              diff: Math.abs(size.width - targetWidth),
-            }));
-
-            // Sort by difference (smallest first)
-            sizesWithDiff.sort((a, b) => a.diff - b.diff);
-
-            if (sizesWithDiff.length > 0) {
-              // Get all sizes that have the same difference as the best match
-              const bestDiff = sizesWithDiff[0].diff;
-              matchResult.width = sizesWithDiff
-                .filter((size) => size.diff === bestDiff)
-                .map(({ diff, ...size }) => size); // Remove the diff property
-            }
-          }
+          matches[measurement.finger_position] = {
+            width: comfortFit ? [comfortFit] : undefined,
+            curve: tightFit ? [tightFit] : undefined,
+            availableSizes: perfectFit ? [perfectFit] : undefined,
+          };
         }
-
-        // Find curve match
-        const measurementCurve = measurement.nail_bed_curve;
-        if (measurementCurve !== undefined && measurementCurve > 0) {
-          if (preferSmallerSizes) {
-            // Find sizes with curve >= measurement
-            const validCurveSizes = sizes.filter(
-              (size) =>
-                size.inner_curve !== undefined &&
-                size.inner_curve >= measurementCurve
-            );
-
-            if (validCurveSizes.length > 0) {
-              // Sort by curve in ascending order to get the smallest valid curve
-              validCurveSizes.sort(
-                (a, b) => (a.inner_curve || 0) - (b.inner_curve || 0)
-              );
-
-              // Get all sizes that have the same curve as the best match
-              const bestCurve = validCurveSizes[0].inner_curve;
-              matchResult.curve = validCurveSizes.filter(
-                (size) => size.inner_curve === bestCurve
-              );
-            }
-          } else {
-            // Find closest curve match
-            const sizesWithDiff = sizes
-              .filter((size) => size.inner_curve !== undefined)
-              .map((size) => ({
-                ...size,
-                diff: Math.abs((size.inner_curve || 0) - measurementCurve),
-              }));
-
-            if (sizesWithDiff.length > 0) {
-              // Sort by difference (smallest first)
-              sizesWithDiff.sort((a, b) => a.diff - b.diff);
-
-              // Get all sizes that have the same difference as the best match
-              const bestDiff = sizesWithDiff[0].diff;
-              matchResult.curve = sizesWithDiff
-                .filter((size) => size.diff === bestDiff)
-                .map(({ diff, ...size }) => size); // Remove the diff property
-            }
-          }
-        }
-
-        matches[measurement.finger_position] = matchResult;
       });
 
       setMatchedSizes(matches);
@@ -621,6 +613,61 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
         measurement.nail_bed_width > 0 ||
         (measurement.nail_bed_curve !== undefined &&
           measurement.nail_bed_curve > 0)
+    );
+  };
+
+  // In the display component, we just use the pre-calculated values
+  const DisplaySizeMatches = ({
+    measurement,
+  }: {
+    measurement: FingerMeasurement;
+  }) => {
+    const matches = matchedSizes[measurement.finger_position];
+    if (!matches) return null;
+
+    const comfortFit = matches.width?.[0];
+    const tightFit = matches.curve?.[0];
+    const perfectFit = matches.availableSizes?.[0];
+
+    return (
+      <>
+        {comfortFit && (
+          <div className="bg-blue-50 rounded p-1 text-center">
+            <div className="text-[10px] font-medium text-blue-900 group relative cursor-help">
+              Comfort: {comfortFit.size_label}
+              <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-8 left-1/2 transform -translate-x-1/2 w-max">
+                Width: {comfortFit.width}mm
+                <br />
+                Curve: {comfortFit.inner_curve || "N/A"}mm
+              </div>
+            </div>
+          </div>
+        )}
+        {perfectFit && (
+          <div className="bg-green-50 rounded p-1 text-center ring-1 ring-green-500">
+            <div className="text-[10px] font-medium text-green-900 group relative cursor-help">
+              Perfect: {perfectFit.size_label}
+              <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-8 left-1/2 transform -translate-x-1/2 w-max">
+                Width: {perfectFit.width}mm
+                <br />
+                Curve: {perfectFit.inner_curve || "N/A"}mm
+              </div>
+            </div>
+          </div>
+        )}
+        {tightFit && (
+          <div className="bg-purple-50 rounded p-1 text-center">
+            <div className="text-[10px] font-medium text-purple-900 group relative cursor-help">
+              Tight: {tightFit.size_label}
+              <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-8 left-1/2 transform -translate-x-1/2 w-max">
+                Width: {tightFit.width}mm
+                <br />
+                Curve: {tightFit.inner_curve || "N/A"}mm
+              </div>
+            </div>
+          </div>
+        )}
+      </>
     );
   };
 
@@ -808,53 +855,14 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
                         }
                         className="mt-1 block w-10 sm:w-14 rounded-md border border-gray-300 bg-white py-1 sm:py-2 px-1 sm:px-3 shadow-sm focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 text-gray-900 text-xs sm:text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
-                      {/* Width Match Result */}
-                      {Object.keys(matchedSizes).length > 0 && (
-                        <div className="mt-1">
-                          {matchedSizes[measurement.finger_position]?.width
-                            ?.length ? (
-                            <div className="text-base text-gray-700 text-center">
-                              <div className="font-bold text-lg mb-2">
-                                Size
-                                {(matchedSizes[measurement.finger_position]
-                                  ?.width?.length ?? 0) > 1
-                                  ? "s"
-                                  : ""}
-                              </div>
-                              {matchedSizes[
-                                measurement.finger_position
-                              ]?.width?.map((size) => (
-                                <div
-                                  key={size.id}
-                                  className="bg-gray-50 rounded-lg p-2 mb-1 shadow-sm border border-gray-100"
-                                >
-                                  <div className="font-medium text-base">
-                                    {size.size_label}
-                                  </div>
-                                  <div className="text-sm text-gray-600">
-                                    W: {size.width}
-                                  </div>
-                                  {size.length && (
-                                    <div className="text-sm text-gray-600">
-                                      L: {size.length}
-                                    </div>
-                                  )}
-                                  {typeof size.inner_curve === "number" &&
-                                    size.inner_curve > 0 && (
-                                      <div className="text-sm text-gray-600">
-                                        IC: {size.inner_curve}
-                                      </div>
-                                    )}
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="text-base text-red-500 text-center font-medium">
-                              No match
-                            </div>
-                          )}
-                        </div>
-                      )}
+
+                      {/* Size Matches for Left Hand */}
+                      {Object.keys(matchedSizes).length > 0 &&
+                        measurement.nail_bed_width > 0 && (
+                          <div className="mt-4 w-full space-y-2">
+                            <DisplaySizeMatches measurement={measurement} />
+                          </div>
+                        )}
                     </div>
                   ))}
               </div>
@@ -884,53 +892,6 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
                         }
                         className="mt-1 block w-10 sm:w-14 rounded-md border border-gray-300 bg-white py-1 sm:py-2 px-1 sm:px-3 shadow-sm focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 text-gray-900 text-xs sm:text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
-                      {/* Curve Match Result */}
-                      {Object.keys(matchedSizes).length > 0 && (
-                        <div className="mt-1">
-                          {matchedSizes[measurement.finger_position]?.curve
-                            ?.length ? (
-                            <div className="text-base text-gray-700 text-center">
-                              <div className="font-bold text-lg mb-2">
-                                Size
-                                {(matchedSizes[measurement.finger_position]
-                                  ?.curve?.length ?? 0) > 1
-                                  ? "s"
-                                  : ""}
-                              </div>
-                              {matchedSizes[
-                                measurement.finger_position
-                              ]?.curve?.map((size) => (
-                                <div
-                                  key={size.id}
-                                  className="bg-gray-50 rounded-lg p-2 mb-1 shadow-sm border border-gray-100"
-                                >
-                                  <div className="font-medium text-base">
-                                    {size.size_label}
-                                  </div>
-                                  <div className="text-sm text-gray-600">
-                                    W: {size.width}
-                                  </div>
-                                  {size.length && (
-                                    <div className="text-sm text-gray-600">
-                                      L: {size.length}
-                                    </div>
-                                  )}
-                                  {typeof size.inner_curve === "number" &&
-                                    size.inner_curve > 0 && (
-                                      <div className="text-sm text-gray-600">
-                                        IC: {size.inner_curve}
-                                      </div>
-                                    )}
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="text-base text-red-500 text-center font-medium">
-                              No match
-                            </div>
-                          )}
-                        </div>
-                      )}
                     </div>
                   ))}
               </div>
@@ -998,53 +959,14 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
                       }
                       className="mt-1 block w-10 sm:w-14 rounded-md border border-gray-300 bg-white py-1 sm:py-2 px-1 sm:px-3 shadow-sm focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 text-gray-900 text-xs sm:text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
-                    {/* Width Match Result */}
-                    {Object.keys(matchedSizes).length > 0 && (
-                      <div className="mt-1">
-                        {matchedSizes[measurement.finger_position]?.width
-                          ?.length ? (
-                          <div className="text-base text-gray-700 text-center">
-                            <div className="font-bold text-lg mb-2">
-                              Size
-                              {(matchedSizes[measurement.finger_position]?.width
-                                ?.length ?? 0) > 1
-                                ? "s"
-                                : ""}
-                            </div>
-                            {matchedSizes[
-                              measurement.finger_position
-                            ]?.width?.map((size) => (
-                              <div
-                                key={size.id}
-                                className="bg-gray-50 rounded-lg p-2 mb-1 shadow-sm border border-gray-100"
-                              >
-                                <div className="font-medium text-base">
-                                  {size.size_label}
-                                </div>
-                                <div className="text-sm text-gray-600">
-                                  W: {size.width}
-                                </div>
-                                {size.length && (
-                                  <div className="text-sm text-gray-600">
-                                    L: {size.length}
-                                  </div>
-                                )}
-                                {typeof size.inner_curve === "number" &&
-                                  size.inner_curve > 0 && (
-                                    <div className="text-sm text-gray-600">
-                                      IC: {size.inner_curve}
-                                    </div>
-                                  )}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="text-base text-red-500 text-center font-medium">
-                            No match
-                          </div>
-                        )}
-                      </div>
-                    )}
+
+                    {/* Size Matches for Right Hand */}
+                    {Object.keys(matchedSizes).length > 0 &&
+                      measurement.nail_bed_width > 0 && (
+                        <div className="mt-4 w-full space-y-2">
+                          <DisplaySizeMatches measurement={measurement} />
+                        </div>
+                      )}
                   </div>
                 ))}
               </div>
@@ -1071,53 +993,6 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
                       }
                       className="mt-1 block w-10 sm:w-14 rounded-md border border-gray-300 bg-white py-1 sm:py-2 px-1 sm:px-3 shadow-sm focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 text-gray-900 text-xs sm:text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
-                    {/* Curve Match Result */}
-                    {Object.keys(matchedSizes).length > 0 && (
-                      <div className="mt-1">
-                        {matchedSizes[measurement.finger_position]?.curve
-                          ?.length ? (
-                          <div className="text-base text-gray-700 text-center">
-                            <div className="font-bold text-lg mb-2">
-                              Size
-                              {(matchedSizes[measurement.finger_position]?.curve
-                                ?.length ?? 0) > 1
-                                ? "s"
-                                : ""}
-                            </div>
-                            {matchedSizes[
-                              measurement.finger_position
-                            ]?.curve?.map((size) => (
-                              <div
-                                key={size.id}
-                                className="bg-gray-50 rounded-lg p-2 mb-1 shadow-sm border border-gray-100"
-                              >
-                                <div className="font-medium text-base">
-                                  {size.size_label}
-                                </div>
-                                <div className="text-sm text-gray-600">
-                                  W: {size.width}
-                                </div>
-                                {size.length && (
-                                  <div className="text-sm text-gray-600">
-                                    L: {size.length}
-                                  </div>
-                                )}
-                                {typeof size.inner_curve === "number" &&
-                                  size.inner_curve > 0 && (
-                                    <div className="text-sm text-gray-600">
-                                      IC: {size.inner_curve}
-                                    </div>
-                                  )}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="text-base text-red-500 text-center font-medium">
-                            No match
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
                 ))}
               </div>
@@ -1125,7 +1000,36 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
           </div>
         </div>
 
-        <p className="text-sm text-gray-700 px-6">
+        {/* Help Text */}
+        {Object.keys(matchedSizes).length > 0 && (
+          <div className="mt-6 px-6">
+            <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-600">
+              <p className="font-medium mb-2">Size Match Guide:</p>
+              <ul className="space-y-1 list-disc pl-5">
+                <li>
+                  <span className="text-blue-700 font-medium">
+                    Comfort Fit:
+                  </span>{" "}
+                  Prioritizes less pressure on natural nail
+                </li>
+                <li>
+                  <span className="text-green-700 font-medium">
+                    Perfect Fit:
+                  </span>{" "}
+                  Balances between comfort and adhesion
+                </li>
+                <li>
+                  <span className="text-purple-700 font-medium">
+                    Tight Fit:
+                  </span>{" "}
+                  Prioritizes better adhesion
+                </li>
+              </ul>
+            </div>
+          </div>
+        )}
+
+        <p className="text-sm text-gray-700 px-6 mt-4">
           *All measurements are in millimeters
         </p>
 
@@ -1220,8 +1124,6 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
               : "Save Measurements"}
           </button>
         </div>
-
-        <div className="space-y-4">{/* Existing code */}</div>
       </div>
 
       <SelectClientModal

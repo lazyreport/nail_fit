@@ -348,16 +348,22 @@ export function NailFitting({ clientId }: NailFittingProps) {
 
         // Find width match
         if (measurement.nail_bed_width > 0) {
-          let validWidthSizes = sizes.filter(
-            (size) =>
-              size.width <=
-              (isTaperedShape
-                ? measurement.nail_bed_width + 0.5
-                : measurement.nail_bed_width)
-          );
+          // Only adjust width for tapered shapes
+          const targetWidth = isTaperedShape
+            ? measurement.nail_bed_width + 0.5
+            : measurement.nail_bed_width;
+
+          // Find the closest size to our target width
+          let validWidthSizes = sizes.map((size) => ({
+            ...size,
+            distance: Math.abs(size.width - targetWidth),
+          }));
+
           if (validWidthSizes.length > 0) {
-            // Sort sizes by width in descending order
-            validWidthSizes = validWidthSizes.sort((a, b) => b.width - a.width);
+            // Sort by distance from target width
+            validWidthSizes = validWidthSizes.sort(
+              (a, b) => a.distance - b.distance
+            );
 
             // Get all sizes that have the same width as the best match
             const bestWidth = validWidthSizes[0].width;
@@ -370,13 +376,15 @@ export function NailFitting({ clientId }: NailFittingProps) {
         // Find curve match
         const measurementCurve = measurement.nail_bed_curve;
         if (measurementCurve !== undefined && measurementCurve > 0) {
+          // Try to find sizes with slightly larger curvature
           const validCurveSizes = sizes.filter(
             (size) =>
               size.inner_curve !== undefined &&
               size.inner_curve >= measurementCurve
           );
+
           if (validCurveSizes.length > 0) {
-            // Sort sizes by curve in ascending order
+            // Sort sizes by curve in ascending order to get the smallest valid curve
             validCurveSizes.sort(
               (a, b) => (a.inner_curve || 0) - (b.inner_curve || 0)
             );

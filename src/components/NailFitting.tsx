@@ -45,6 +45,8 @@ interface MatchedSizes {
   width?: NailTipSize[];
   curve?: NailTipSize[];
   availableSizes?: NailTipSize[];
+  hasTipCurvature?: boolean;
+  hasUserCurvature?: boolean;
 }
 
 interface NailSetDisplay extends NailTipSet {
@@ -94,8 +96,8 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
   const [selectedClientId, setSelectedClientId] = useState<number | null>(
     initialClientId || null
   );
-  const [preferSmallerSizes, setPreferSmallerSizes] = useState(true);
-  const [useTaperedCompensation, setUseTaperedCompensation] = useState(true);
+  const [preferSmallerSizes, setPreferSmallerSizes] = useState(false);
+  const [useTaperedCompensation, setUseTaperedCompensation] = useState(false);
 
   useEffect(() => {
     async function init() {
@@ -494,17 +496,24 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
               : measurement.nail_bed_width;
 
           const comfortFit = findComfortFit(sizes, targetWidth);
-          const tightFit = findTightFit(
-            sizes,
-            targetWidth,
-            measurement.nail_bed_curve
-          );
-          const perfectFit = findPerfectFit(sizes, comfortFit, tightFit);
+
+          // Only find tight and perfect fits if we have valid curvature data
+          const hasCurvatureData =
+            sizes.some((s) => s.inner_curve) && measurement.nail_bed_curve;
+          const tightFit = hasCurvatureData
+            ? findTightFit(sizes, targetWidth, measurement.nail_bed_curve)
+            : null;
+          const perfectFit =
+            hasCurvatureData && tightFit
+              ? findPerfectFit(sizes, comfortFit, tightFit)
+              : null;
 
           matches[measurement.finger_position] = {
             width: comfortFit ? [comfortFit] : undefined,
             curve: tightFit ? [tightFit] : undefined,
             availableSizes: perfectFit ? [perfectFit] : undefined,
+            hasTipCurvature: sizes.some((s) => s.inner_curve),
+            hasUserCurvature: !!measurement.nail_bed_curve,
           };
         }
       });
@@ -629,6 +638,19 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
     const tightFit = matches.curve?.[0];
     const perfectFit = matches.availableSizes?.[0];
 
+    const getCurvatureMessage = () => {
+      const messages = [];
+      if (!matches.hasTipCurvature) {
+        messages.push(
+          "Following product does not provide inner curvature information"
+        );
+      }
+      if (!matches.hasUserCurvature) {
+        messages.push("This user's curvature measurement is missing");
+      }
+      return messages.join("\n");
+    };
+
     return (
       <>
         {comfortFit && (
@@ -643,30 +665,54 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
             </div>
           </div>
         )}
-        {perfectFit && (
-          <div className="bg-green-50 rounded p-1 text-center ring-1 ring-green-500">
-            <div className="text-[10px] font-medium text-green-900 group relative cursor-help">
-              Perfect: {perfectFit.size_label}
-              <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-8 left-1/2 transform -translate-x-1/2 w-max">
-                Width: {perfectFit.width}mm
-                <br />
-                Curve: {perfectFit.inner_curve || "N/A"}mm
-              </div>
+        <div
+          className={`rounded p-1 text-center ${
+            perfectFit ? "bg-green-50 ring-1 ring-green-500" : "bg-gray-100"
+          }`}
+        >
+          <div
+            className={`text-[10px] font-medium group relative cursor-help ${
+              perfectFit ? "text-green-900" : "text-gray-400"
+            }`}
+          >
+            Perfect: {perfectFit ? perfectFit.size_label : "N/A"}
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-8 left-1/2 transform -translate-x-1/2 w-max whitespace-pre-line">
+              {perfectFit ? (
+                <>
+                  Width: {perfectFit.width}mm
+                  <br />
+                  Curve: {perfectFit.inner_curve || "N/A"}mm
+                </>
+              ) : (
+                getCurvatureMessage()
+              )}
             </div>
           </div>
-        )}
-        {tightFit && (
-          <div className="bg-purple-50 rounded p-1 text-center">
-            <div className="text-[10px] font-medium text-purple-900 group relative cursor-help">
-              Tight: {tightFit.size_label}
-              <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-8 left-1/2 transform -translate-x-1/2 w-max">
-                Width: {tightFit.width}mm
-                <br />
-                Curve: {tightFit.inner_curve || "N/A"}mm
-              </div>
+        </div>
+        <div
+          className={`rounded p-1 text-center ${
+            tightFit ? "bg-purple-50" : "bg-gray-100"
+          }`}
+        >
+          <div
+            className={`text-[10px] font-medium group relative cursor-help ${
+              tightFit ? "text-purple-900" : "text-gray-400"
+            }`}
+          >
+            Tight: {tightFit ? tightFit.size_label : "N/A"}
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-8 left-1/2 transform -translate-x-1/2 w-max whitespace-pre-line">
+              {tightFit ? (
+                <>
+                  Width: {tightFit.width}mm
+                  <br />
+                  Curve: {tightFit.inner_curve || "N/A"}mm
+                </>
+              ) : (
+                getCurvatureMessage()
+              )}
             </div>
           </div>
-        )}
+        </div>
       </>
     );
   };

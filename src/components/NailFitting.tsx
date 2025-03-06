@@ -42,8 +42,8 @@ interface NailFittingProps {
 }
 
 interface MatchedSizes {
-  width?: NailTipSize;
-  curve?: NailTipSize;
+  width?: NailTipSize[];
+  curve?: NailTipSize[];
 }
 
 interface NailSetDisplay extends NailTipSet {
@@ -339,19 +339,31 @@ export function NailFitting({ clientId }: NailFittingProps) {
 
       // Match sizes for each finger
       const matches: Record<string, MatchedSizes> = {};
+      const isTaperedShape =
+        selectedSet.shape.toLowerCase().includes("almond") ||
+        selectedSet.shape.toLowerCase().includes("stilleto");
 
       measurements.forEach((measurement) => {
         const matchResult: MatchedSizes = {};
 
         // Find width match
         if (measurement.nail_bed_width > 0) {
-          const validWidthSizes = sizes.filter(
-            (size) => size.width <= measurement.nail_bed_width
+          let validWidthSizes = sizes.filter(
+            (size) =>
+              size.width <=
+              (isTaperedShape
+                ? measurement.nail_bed_width + 0.5
+                : measurement.nail_bed_width)
           );
           if (validWidthSizes.length > 0) {
-            matchResult.width = validWidthSizes.sort(
-              (a, b) => b.width - a.width
-            )[0];
+            // Sort sizes by width in descending order
+            validWidthSizes = validWidthSizes.sort((a, b) => b.width - a.width);
+
+            // Get all sizes that have the same width as the best match
+            const bestWidth = validWidthSizes[0].width;
+            matchResult.width = validWidthSizes.filter(
+              (size) => size.width === bestWidth
+            );
           }
         }
 
@@ -363,9 +375,18 @@ export function NailFitting({ clientId }: NailFittingProps) {
               size.inner_curve !== undefined &&
               size.inner_curve >= measurementCurve
           );
-          matchResult.curve = validCurveSizes.sort(
-            (a, b) => (a.inner_curve || 0) - (b.inner_curve || 0)
-          )[0];
+          if (validCurveSizes.length > 0) {
+            // Sort sizes by curve in ascending order
+            validCurveSizes.sort(
+              (a, b) => (a.inner_curve || 0) - (b.inner_curve || 0)
+            );
+
+            // Get all sizes that have the same curve as the best match
+            const bestCurve = validCurveSizes[0].inner_curve;
+            matchResult.curve = validCurveSizes.filter(
+              (size) => size.inner_curve === bestCurve
+            );
+          }
         }
 
         matches[measurement.finger_position] = matchResult;
@@ -482,7 +503,7 @@ export function NailFitting({ clientId }: NailFittingProps) {
                   <div className="relative">
                     <div className="relative w-full">
                       <Combobox.Input
-                        className="w-full rounded-md border border-gray-300 bg-white py-2 pl-3 pr-10 text-gray-900 focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 sm:text-sm"
+                        className="w-full rounded-md border border-gray-300 bg-white py-2 pl-3 pr-10 text-gray-900 focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 text-base"
                         onChange={(event) => setQuery(event.target.value)}
                         displayValue={(set: NailSetDisplay | null) =>
                           set?.displayName || ""
@@ -496,54 +517,20 @@ export function NailFitting({ clientId }: NailFittingProps) {
                         />
                       </Combobox.Button>
                     </div>
-                    <Combobox.Options className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white py-1 text-sm shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
-                      {filteredNailSets.length === 0 && query !== "" ? (
-                        <div className="relative cursor-default select-none py-2 px-4 text-gray-700">
-                          Nothing found.
-                        </div>
-                      ) : (
-                        filteredNailSets.map((set) => (
-                          <Combobox.Option
-                            key={set.id}
-                            className={({ active }) =>
-                              `relative cursor-default select-none py-2 pl-10 pr-4 ${
-                                active
-                                  ? "bg-gray-50 text-gray-900"
-                                  : "text-gray-900"
-                              }`
-                            }
-                            value={set}
-                          >
-                            {({ selected }) => (
-                              <>
-                                <span
-                                  className={`block truncate ${
-                                    selected ? "font-medium" : "font-normal"
-                                  }`}
-                                >
-                                  {set.displayName}
-                                </span>
-                                {selected ? (
-                                  <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-600">
-                                    <svg
-                                      xmlns="http://www.w3.org/2000/svg"
-                                      viewBox="0 0 24 24"
-                                      fill="currentColor"
-                                      className="w-5 h-5"
-                                    >
-                                      <path
-                                        fillRule="evenodd"
-                                        d="M19.916 4.626a.75.75 0 01.208 1.04l-9 13.5a.75.75 0 01-1.154.114l-6-6a.75.75 0 011.06-1.06l5.353 5.353 8.493-12.739a.75.75 0 011.04-.208z"
-                                        clipRule="evenodd"
-                                      />
-                                    </svg>
-                                  </span>
-                                ) : null}
-                              </>
-                            )}
-                          </Combobox.Option>
-                        ))
-                      )}
+                    <Combobox.Options className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm">
+                      {filteredNailSets.map((set) => (
+                        <Combobox.Option
+                          key={set.id}
+                          value={set}
+                          className={({ active }) =>
+                            `relative cursor-default select-none py-2 pl-3 pr-9 ${
+                              active ? "bg-gray-100" : "text-gray-900"
+                            }`
+                          }
+                        >
+                          {set.displayName}
+                        </Combobox.Option>
+                      ))}
                     </Combobox.Options>
                   </div>
                 </Combobox>
@@ -552,11 +539,23 @@ export function NailFitting({ clientId }: NailFittingProps) {
                 type="button"
                 onClick={findMatchingSizes}
                 disabled={!selectedSet || loading}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-gray-600 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 whitespace-nowrap"
+                className="inline-flex items-center px-4 py-2 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-gray-600 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 whitespace-nowrap"
               >
-                {loading ? "Finding matches..." : "Match Sizes"}
+                {loading ? "Finding matches..." : "Size"}
               </button>
             </div>
+
+            {selectedSet &&
+              (selectedSet.shape.toLowerCase().includes("almond") ||
+                selectedSet.shape.toLowerCase().includes("stilleto")) && (
+                <div className="mt-4 px-4 py-2 bg-blue-50 border border-blue-200 rounded-md">
+                  <p className="text-sm text-blue-700">
+                    Note: For {selectedSet.shape} shapes, we recommend sizing up
+                    slightly to ensure a comfortable fit at the nail bed. The
+                    suggested sizes below have been automatically adjusted.
+                  </p>
+                </div>
+              )}
           </div>
         </div>
 
@@ -628,22 +627,42 @@ export function NailFitting({ clientId }: NailFittingProps) {
                       {/* Width Match Result */}
                       {Object.keys(matchedSizes).length > 0 && (
                         <div className="mt-1">
-                          {matchedSizes[measurement.finger_position]?.width ? (
+                          {matchedSizes[measurement.finger_position]?.width
+                            ?.length ? (
                             <div className="text-base text-gray-700 text-center">
-                              <div className="font-bold text-lg">
-                                Size{" "}
-                                {
-                                  matchedSizes[measurement.finger_position]
-                                    ?.width?.size_label
-                                }
+                              <div className="font-bold text-lg mb-2">
+                                Size
+                                {(matchedSizes[measurement.finger_position]
+                                  ?.width?.length ?? 0) > 1
+                                  ? "s"
+                                  : ""}
                               </div>
-                              <div className="font-medium">
-                                {
-                                  matchedSizes[measurement.finger_position]
-                                    ?.width?.width
-                                }
-                                mm
-                              </div>
+                              {matchedSizes[
+                                measurement.finger_position
+                              ]?.width?.map((size) => (
+                                <div
+                                  key={size.id}
+                                  className="bg-gray-50 rounded-lg p-2 mb-1 shadow-sm border border-gray-100"
+                                >
+                                  <div className="font-medium text-base">
+                                    {size.size_label}
+                                  </div>
+                                  <div className="text-sm text-gray-600">
+                                    W: {size.width}
+                                  </div>
+                                  {size.length && (
+                                    <div className="text-sm text-gray-600">
+                                      L: {size.length}
+                                    </div>
+                                  )}
+                                  {typeof size.inner_curve === "number" &&
+                                    size.inner_curve > 0 && (
+                                      <div className="text-sm text-gray-600">
+                                        IC: {size.inner_curve}
+                                      </div>
+                                    )}
+                                </div>
+                              ))}
                             </div>
                           ) : (
                             <div className="text-base text-red-500 text-center font-medium">
@@ -684,22 +703,42 @@ export function NailFitting({ clientId }: NailFittingProps) {
                       {/* Curve Match Result */}
                       {Object.keys(matchedSizes).length > 0 && (
                         <div className="mt-1">
-                          {matchedSizes[measurement.finger_position]?.curve ? (
+                          {matchedSizes[measurement.finger_position]?.curve
+                            ?.length ? (
                             <div className="text-base text-gray-700 text-center">
-                              <div className="font-bold text-lg">
-                                Size{" "}
-                                {
-                                  matchedSizes[measurement.finger_position]
-                                    ?.curve?.size_label
-                                }
+                              <div className="font-bold text-lg mb-2">
+                                Curve
+                                {(matchedSizes[measurement.finger_position]
+                                  ?.curve?.length ?? 0) > 1
+                                  ? "s"
+                                  : ""}
                               </div>
-                              <div className="font-medium">
-                                {
-                                  matchedSizes[measurement.finger_position]
-                                    ?.curve?.inner_curve
-                                }
-                                mm
-                              </div>
+                              {matchedSizes[
+                                measurement.finger_position
+                              ]?.curve?.map((size) => (
+                                <div
+                                  key={size.id}
+                                  className="bg-gray-50 rounded-lg p-2 mb-1 shadow-sm border border-gray-100"
+                                >
+                                  <div className="font-medium text-base">
+                                    {size.size_label}
+                                  </div>
+                                  <div className="text-sm text-gray-600">
+                                    W: {size.width}
+                                  </div>
+                                  {size.length && (
+                                    <div className="text-sm text-gray-600">
+                                      L: {size.length}
+                                    </div>
+                                  )}
+                                  {typeof size.inner_curve === "number" &&
+                                    size.inner_curve > 0 && (
+                                      <div className="text-sm text-gray-600">
+                                        IC: {size.inner_curve}
+                                      </div>
+                                    )}
+                                </div>
+                              ))}
                             </div>
                           ) : (
                             <div className="text-base text-red-500 text-center font-medium">
@@ -778,22 +817,42 @@ export function NailFitting({ clientId }: NailFittingProps) {
                     {/* Width Match Result */}
                     {Object.keys(matchedSizes).length > 0 && (
                       <div className="mt-1">
-                        {matchedSizes[measurement.finger_position]?.width ? (
+                        {matchedSizes[measurement.finger_position]?.width
+                          ?.length ? (
                           <div className="text-base text-gray-700 text-center">
-                            <div className="font-bold text-lg">
-                              Size{" "}
-                              {
-                                matchedSizes[measurement.finger_position]?.width
-                                  ?.size_label
-                              }
+                            <div className="font-bold text-lg mb-2">
+                              Size
+                              {(matchedSizes[measurement.finger_position]?.width
+                                ?.length ?? 0) > 1
+                                ? "s"
+                                : ""}
                             </div>
-                            <div className="font-medium">
-                              {
-                                matchedSizes[measurement.finger_position]?.width
-                                  ?.width
-                              }
-                              mm
-                            </div>
+                            {matchedSizes[
+                              measurement.finger_position
+                            ]?.width?.map((size) => (
+                              <div
+                                key={size.id}
+                                className="bg-gray-50 rounded-lg p-2 mb-1 shadow-sm border border-gray-100"
+                              >
+                                <div className="font-medium text-base">
+                                  {size.size_label}
+                                </div>
+                                <div className="text-sm text-gray-600">
+                                  W: {size.width}
+                                </div>
+                                {size.length && (
+                                  <div className="text-sm text-gray-600">
+                                    L: {size.length}
+                                  </div>
+                                )}
+                                {typeof size.inner_curve === "number" &&
+                                  size.inner_curve > 0 && (
+                                    <div className="text-sm text-gray-600">
+                                      IC: {size.inner_curve}
+                                    </div>
+                                  )}
+                              </div>
+                            ))}
                           </div>
                         ) : (
                           <div className="text-base text-red-500 text-center font-medium">
@@ -831,22 +890,42 @@ export function NailFitting({ clientId }: NailFittingProps) {
                     {/* Curve Match Result */}
                     {Object.keys(matchedSizes).length > 0 && (
                       <div className="mt-1">
-                        {matchedSizes[measurement.finger_position]?.curve ? (
+                        {matchedSizes[measurement.finger_position]?.curve
+                          ?.length ? (
                           <div className="text-base text-gray-700 text-center">
-                            <div className="font-bold text-lg">
-                              Size{" "}
-                              {
-                                matchedSizes[measurement.finger_position]?.curve
-                                  ?.size_label
-                              }
+                            <div className="font-bold text-lg mb-2">
+                              Curve
+                              {(matchedSizes[measurement.finger_position]?.curve
+                                ?.length ?? 0) > 1
+                                ? "s"
+                                : ""}
                             </div>
-                            <div className="font-medium">
-                              {
-                                matchedSizes[measurement.finger_position]?.curve
-                                  ?.inner_curve
-                              }
-                              mm
-                            </div>
+                            {matchedSizes[
+                              measurement.finger_position
+                            ]?.curve?.map((size) => (
+                              <div
+                                key={size.id}
+                                className="bg-gray-50 rounded-lg p-2 mb-1 shadow-sm border border-gray-100"
+                              >
+                                <div className="font-medium text-base">
+                                  {size.size_label}
+                                </div>
+                                <div className="text-sm text-gray-600">
+                                  W: {size.width}
+                                </div>
+                                {size.length && (
+                                  <div className="text-sm text-gray-600">
+                                    L: {size.length}
+                                  </div>
+                                )}
+                                {typeof size.inner_curve === "number" &&
+                                  size.inner_curve > 0 && (
+                                    <div className="text-sm text-gray-600">
+                                      IC: {size.inner_curve}
+                                    </div>
+                                  )}
+                              </div>
+                            ))}
                           </div>
                         ) : (
                           <div className="text-base text-red-500 text-center font-medium">
@@ -941,6 +1020,8 @@ export function NailFitting({ clientId }: NailFittingProps) {
             {saveStatus === "saving" ? "Saving..." : "Save Measurements"}
           </button>
         </div>
+
+        <div className="space-y-4">{/* Existing code */}</div>
       </div>
 
       <SelectClientModal

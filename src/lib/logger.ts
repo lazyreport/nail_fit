@@ -1,6 +1,37 @@
 import { PostgrestError } from "@supabase/supabase-js";
 
-type LogLevel = "info" | "warn" | "error" | "debug";
+// Define log levels
+enum LogLevel {
+  DEBUG = 'DEBUG',
+  INFO = 'INFO',
+  WARN = 'WARN',
+  ERROR = 'ERROR'
+}
+
+let currentLogLevel: LogLevel = LogLevel.INFO;
+
+export function setLogLevel(level: LogLevel) {
+  currentLogLevel = level;
+}
+
+export function log(level: LogLevel, message: string, ...args: any[]) {
+  if (shouldLog(level)) {
+    console.log(`[${level}] ${message}`, ...args);
+  }
+}
+
+function shouldLog(level: LogLevel): boolean {
+  const levels = Object.values(LogLevel);
+  return levels.indexOf(level) >= levels.indexOf(currentLogLevel);
+}
+
+export const logger = {
+  debug: (message: string, ...args: any[]) => log(LogLevel.DEBUG, message, ...args),
+  info: (message: string, ...args: any[]) => log(LogLevel.INFO, message, ...args),
+  warn: (message: string, ...args: any[]) => log(LogLevel.WARN, message, ...args),
+  error: (message: string, ...args: any[]) => log(LogLevel.ERROR, message, ...args),
+  setLevel: setLogLevel
+};
 
 interface LogMessage {
   message: string;

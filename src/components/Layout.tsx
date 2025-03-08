@@ -77,6 +77,14 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                   Nail Sets
                 </Link>
                 <Link
+                  to="/relative-measuring"
+                  className={`text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium ${isActive(
+                    "/relative-measuring"
+                  )}`}
+                >
+                  Photo Measure
+                </Link>
+                <Link
                   to="/database"
                   className={`text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium ${isActive(
                     "/database"

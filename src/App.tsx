@@ -11,6 +11,7 @@ import { NailFitting } from "./components/NailFitting";
 import { UserCredits } from "./components/UserCredits";
 import { NailTipSetList } from "./components/NailTipSetList";
 import { DatabaseSchema } from "./components/DatabaseSchema";
+import { RelativeMeasuring } from "./components/RelativeMeasuring";
 import Layout from "./components/Layout";
 import NewNailTipSet from "./pages/nail-tip-sets/new";
 import EditNailTipSet from "./pages/nail-tip-sets/edit";
@@ -130,6 +131,20 @@ export default function App() {
             <ProtectedRoute>
               <Layout>
                 <DatabaseSchema />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/relative-measuring"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <RelativeMeasuring
+                  onMeasurementComplete={(measurement) =>
+                    console.log("Measured:", measurement)
+                  }
+                />
               </Layout>
             </ProtectedRoute>
           }

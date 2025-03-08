@@ -196,42 +196,17 @@ export function NailTipSetList() {
                     <div className="flex justify-between items-start gap-8">
                       <div className="flex-1 min-w-0">
                         <h3 className="text-xl font-medium text-gray-900 text-left">
-                          {[set.name, set.shape, set.length]
+                          {[
+                            set.brand.name.toUpperCase(),
+                            set.name,
+                            set.shape,
+                            set.length,
+                          ]
                             .filter(Boolean)
                             .join(" ")}
                         </h3>
-                        <p className="mt-1 text-sm text-gray-500 text-left">
-                          by{" "}
-                          {set.brand.website ? (
-                            <a
-                              href={set.brand.website}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-gray-600 hover:text-gray-900 underline underline-offset-2"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              {set.brand.name}
-                            </a>
-                          ) : (
-                            set.brand.name
-                          )}
-                        </p>
                       </div>
                       <div className="flex items-start gap-4">
-                        {set.image_url && (
-                          <div className="flex-shrink-0">
-                            <img
-                              src={set.image_url}
-                              alt={set.name}
-                              className="h-24 w-24 object-cover rounded-md shadow-sm"
-                              onError={(e) => {
-                                const target = e.target as HTMLImageElement;
-                                target.onerror = null;
-                                target.style.display = "none";
-                              }}
-                            />
-                          </div>
-                        )}
                         <ChevronUpIcon
                           className={`${
                             open ? "transform rotate-180" : ""
@@ -265,7 +240,7 @@ export function NailTipSetList() {
                           </button>
                         </div>
                       </div>
-                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6">
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-6">
                         {set.sizes.map((size) => (
                           <div
                             key={size.id}

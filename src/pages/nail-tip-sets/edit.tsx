@@ -4,8 +4,13 @@ import { NailTipSetForm } from "../../components/NailTipSetForm";
 import { Brand, NailTipSet, NailTipSize } from "../../types/database";
 import { fetchData } from "../../lib/database";
 
-interface NailTipSetWithDetails extends NailTipSet {
+interface NailTipSetWithDetails {
+  id: number | string;
   brand: Brand;
+  name: string;
+  shape: string;
+  length?: string;
+  image_url?: string;
   sizes: NailTipSize[];
 }
 
@@ -76,6 +81,11 @@ export default function EditNailTipSet() {
     return <div className="text-center py-12">Nail tip set not found</div>;
   }
 
+  const formattedNailTipSet = {
+    ...nailTipSet,
+    id: nailTipSet.id.toString(),
+  };
+
   return (
     <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
       <div className="px-4 sm:px-0">
@@ -84,7 +94,7 @@ export default function EditNailTipSet() {
         </h1>
       </div>
       <div className="mt-5">
-        <NailTipSetForm initialData={nailTipSet} />
+        <NailTipSetForm initialData={formattedNailTipSet} />
       </div>
     </div>
   );

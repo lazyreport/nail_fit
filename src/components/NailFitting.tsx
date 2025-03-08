@@ -97,6 +97,7 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
   );
   const [preferSmallerSizes, setPreferSmallerSizes] = useState(true);
   const [useTaperedCompensation, setUseTaperedCompensation] = useState(true);
+  const [activeStep, setActiveStep] = useState(1);
 
   useEffect(() => {
     async function init() {
@@ -164,11 +165,7 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
       // Fetch the most recent measurements for this client
       const savedMeasurements = await fetchData<FingerMeasurement>(
         "Measurements",
-        undefined,
-        {
-          eq: { column: "client_id", value: selectedClientId },
-          order: { column: "date_measured", ascending: false },
-        }
+        `client_id = ${selectedClientId} ORDER BY date_measured DESC`
       );
 
       if (savedMeasurements.length > 0) {
@@ -367,36 +364,50 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
         throw new Error("Insufficient credits");
       }
 
-      // Delete existing measurements
+      // Find which measurements have changed
+      const changedMeasurements = measurements.filter((measurement, index) => {
+        const original = originalMeasurements[index];
+        return (
+          measurement.nail_bed_width !== original.nail_bed_width ||
+          measurement.nail_bed_curve !== original.nail_bed_curve
+        );
+      });
+
+      if (changedMeasurements.length === 0) {
+        console.log("No measurements have changed");
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus("idle"), 3000);
+        return;
+      }
+
+      // Delete only the changed measurements
+      const fingerPositionsToUpdate = changedMeasurements.map(
+        (m) => m.finger_position
+      );
       const { error: deleteError } = await supabase
         .from("Measurements")
         .delete()
-        .eq("client_id", selectedClientId);
+        .eq("client_id", selectedClientId)
+        .in("finger_position", fingerPositionsToUpdate);
 
       if (deleteError) {
         throw new Error("Failed to delete old measurements");
       }
 
-      // Save new measurements
-      const validMeasurements = measurements
-        .filter((measurement) => measurement.nail_bed_width > 0)
-        .map((measurement) => ({
-          finger_position: measurement.finger_position,
-          nail_bed_width: Number(measurement.nail_bed_width) || 0,
-          nail_bed_curve: measurement.nail_bed_curve
-            ? Number(measurement.nail_bed_curve)
-            : null,
-          date_measured: new Date().toISOString(),
-          client_id: selectedClientId,
-        }));
-
-      if (validMeasurements.length === 0) {
-        throw new Error("No valid measurements to save");
-      }
+      // Insert only the changed measurements
+      const measurementsToInsert = changedMeasurements.map((measurement) => ({
+        finger_position: measurement.finger_position,
+        nail_bed_width: Number(measurement.nail_bed_width) || 0,
+        nail_bed_curve: measurement.nail_bed_curve
+          ? Number(measurement.nail_bed_curve)
+          : null,
+        date_measured: new Date().toISOString(),
+        client_id: selectedClientId,
+      }));
 
       const { error: measurementsError } = await supabase
         .from("Measurements")
-        .insert(validMeasurements);
+        .insert(measurementsToInsert);
 
       if (measurementsError) {
         console.error("Measurements error:", measurementsError);
@@ -411,6 +422,9 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
           .eq("user_id", user.id);
       }
 
+      // Update original measurements to reflect the new state
+      setOriginalMeasurements(measurements);
+
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
     } catch (error) {
@@ -419,6 +433,41 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
       setTimeout(() => setSaveStatus("idle"), 3000);
     }
   }
+
+  // Add cleanup function for orphaned measurements
+  async function cleanupOrphanedMeasurements() {
+    try {
+      await ensureAuthenticated();
+
+      // First, get all client IDs
+      const { data: clients, error: clientsError } = await supabase
+        .from("Clients")
+        .select("id");
+
+      if (clientsError) {
+        throw new Error("Failed to fetch clients");
+      }
+
+      const validClientIds = clients.map((client) => client.id);
+
+      // Delete measurements for non-existent clients
+      const { error: deleteError } = await supabase
+        .from("Measurements")
+        .delete()
+        .not("client_id", "in", `(${validClientIds.join(",")})`);
+
+      if (deleteError) {
+        throw new Error("Failed to delete orphaned measurements");
+      }
+    } catch (error) {
+      console.error("Error cleaning up orphaned measurements:", error);
+    }
+  }
+
+  // Call cleanup on component mount
+  useEffect(() => {
+    cleanupOrphanedMeasurements();
+  }, []);
 
   // Filter nail sets based on search query
   const filteredNailSets =
@@ -531,11 +580,7 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
       // Fetch the most recent measurements for this client
       const savedMeasurements = await fetchData<FingerMeasurement>(
         "Measurements",
-        undefined,
-        {
-          eq: { column: "client_id", value: selectedClientId },
-          order: { column: "date_measured", ascending: false },
-        }
+        `client_id = ${selectedClientId} ORDER BY date_measured DESC`
       );
 
       if (savedMeasurements.length > 0) {
@@ -611,724 +656,974 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
 
   return (
     <div className="w-full h-full min-h-full flex flex-col">
-      <style>{`
-        @keyframes shake {
-          0%, 100% { transform: translateX(0); }
-          10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
-          20%, 40%, 60%, 80% { transform: translateX(4px); }
-        }
-        .shake {
-          animation: shake 0.8s cubic-bezier(.36,.07,.19,.97) both;
-        }
-      `}</style>
-      <div className="w-full flex-1 space-y-6">
-        <div className="p-6">
-          <div className="flex justify-between items-center mb-4">
-            <div className="flex items-center gap-4">
-              <h2 className="text-xl font-medium text-gray-900">
-                Find Matching Sizes
-              </h2>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            <div className="flex items-center space-x-4">
-              <div className="flex-1">
-                <Combobox value={selectedSet} onChange={setSelectedSet}>
-                  <div className="relative">
-                    <div className="relative w-full">
-                      <Combobox.Input
-                        className="w-full rounded-md border border-gray-300 bg-white py-2 pl-3 pr-10 text-gray-900 focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 text-base"
-                        onChange={(event) => setQuery(event.target.value)}
-                        displayValue={(set: NailSetDisplay | null) =>
-                          set?.displayName || ""
-                        }
-                        placeholder="Select or search a nail tip set..."
-                      />
-                      <Combobox.Button className="absolute inset-y-0 right-0 flex items-center pr-2">
-                        <ChevronUpDownIcon
-                          className="h-5 w-5 text-gray-400"
-                          aria-hidden="true"
-                        />
-                      </Combobox.Button>
-                    </div>
-
-                    <Combobox.Options className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm">
-                      {filteredNailSets.length === 0 && query !== "" ? (
-                        <div className="relative cursor-default select-none py-2 px-4 text-gray-700">
-                          Nothing found.
-                        </div>
-                      ) : (
-                        filteredNailSets.map((set) => (
-                          <Combobox.Option
-                            key={set.id}
-                            className={({ active }) =>
-                              `relative cursor-default select-none py-2 pl-3 pr-9 ${
-                                active
-                                  ? "bg-gray-100 text-gray-900"
-                                  : "text-gray-900"
-                              }`
-                            }
-                            value={set}
-                          >
-                            {set.displayName}
-                          </Combobox.Option>
-                        ))
-                      )}
-                    </Combobox.Options>
-                  </div>
-                </Combobox>
-              </div>
+      {/* Step Navigation */}
+      <div className="bg-white border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between">
+            <div className="flex space-x-8">
               <button
-                type="button"
-                onClick={findMatchingSizes}
-                disabled={!selectedSet || loading}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-gray-600 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 whitespace-nowrap"
+                onClick={() => setActiveStep(1)}
+                className={`${
+                  activeStep === 1
+                    ? "border-gray-500 text-gray-900"
+                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
               >
-                {loading ? "Finding matches..." : "Size"}
+                Step 1: Client Info
+              </button>
+              <button
+                onClick={() => setActiveStep(2)}
+                className={`${
+                  activeStep === 2
+                    ? "border-gray-500 text-gray-900"
+                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+              >
+                Step 2: Measurements
+              </button>
+              <button
+                onClick={() => setActiveStep(3)}
+                className={`${
+                  activeStep === 3
+                    ? "border-gray-500 text-gray-900"
+                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+              >
+                Step 3: Size Match
               </button>
             </div>
-
-            {/* Size Table */}
-            {selectedSet && (
-              <div className="mt-4 bg-white rounded-lg shadow overflow-hidden">
-              
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th
-                          scope="col"
-                          className="px-2 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center "
-                        >
-                          Size Label
-                        </th>
-                        {allSizes.map((size) => (
-                          <th
-                            key={size.id}
-                            scope="col"
-                            className="px-2 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center"
-                          >
-                            {size.size_label}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      <tr>
-                        <td className="px-2 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-center">
-                          Width
-                        </td>
-                        {allSizes.map((size) => (
-                          <td
-                            key={size.id}
-                            className="px-2 py-4 whitespace-nowrap text-sm text-gray-500 text-center"
-                          >
-                            {size.width}
-                          </td>
-                        ))}
-                      </tr>
-                      <tr>
-                        <td className="px-2 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-center">
-                          Length
-                        </td>
-                        {allSizes.map((size) => (
-                          <td
-                            key={size.id}
-                            className="px-2 py-4 whitespace-nowrap text-sm text-gray-500 text-center"
-                          >
-                            {size.length}
-                          </td>
-                        ))}
-                      </tr>
-                      <tr>
-                        <td className="px-2 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-center">
-                          IC
-                        </td>
-                        {allSizes.map((size) => (
-                          <td
-                            key={size.id}
-                            className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center"
-                          >
-                            {size.inner_curve || "-"}
-                          </td>
-                        ))}
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* Width Matching Strategy Toggle */}
-            <div className="flex items-center">
-              <input
-                type="checkbox"
-                id="prefer-smaller-sizes"
-                checked={preferSmallerSizes}
-                onChange={(e) => setPreferSmallerSizes(e.target.checked)}
-                className="h-4 w-4 text-gray-600 focus:ring-gray-500 border-gray-300 rounded"
-              />
-              <label
-                htmlFor="prefer-smaller-sizes"
-                className="ml-2 block text-sm text-gray-700"
-              >
-                Prefer smaller sizes (when unchecked, finds closest match)
-              </label>
-            </div>
-
-            {/* Tapered Shape Compensation Toggle */}
-            <div className="flex items-center">
-              <input
-                type="checkbox"
-                id="tapered-compensation"
-                checked={useTaperedCompensation}
-                onChange={(e) => setUseTaperedCompensation(e.target.checked)}
-                className="h-4 w-4 text-gray-600 focus:ring-gray-500 border-gray-300 rounded"
-              />
-              <label
-                htmlFor="tapered-compensation"
-                className="ml-2 block text-sm text-gray-700"
-              >
-                Add 0.5mm for tapered shapes (almond/stiletto)
-              </label>
-            </div>
-
-            {selectedSet &&
-              (selectedSet.shape.toLowerCase().includes("almond") ||
-                selectedSet.shape.toLowerCase().includes("stilleto")) && (
-                <div className="mt-4 px-4 py-2 bg-blue-50 border border-blue-200 rounded-md">
-                  <p className="text-sm text-blue-700">
-                    Note: For {selectedSet.shape} shapes, we recommend sizing up
-                    slightly to ensure a comfortable fit at the nail bed. The
-                    suggested sizes below have been automatically adjusted.
-                  </p>
-                </div>
-              )}
           </div>
         </div>
+      </div>
 
-        <div className="flex flex-col lg:flex-row lg:space-x-8 space-y-8 lg:space-y-0 p-6">
-          {/* Left Hand */}
-          <div className="w-full lg:w-1/2">
-            <h3 className="text-2xl font-bold text-gray-900 mb-6 text-center">
-              Left
-            </h3>
-            {/* Single hand image for left hand */}
-            <div className="w-full max-w-[400px] mx-auto aspect-w-4 aspect-h-3">
-              <div className="relative w-full h-full flex items-center justify-center">
-                <img
-                  src={leftHandImage}
-                  alt="Left Hand"
-                  className="object-contain w-full h-full max-h-[300px]"
-                  onError={(e) => {
-                    console.log("Image load error details:", {
-                      src: e.currentTarget.src,
-                      path: window.location.pathname,
-                      absolutePath: new URL(
-                        e.currentTarget.src,
-                        window.location.href
-                      ).href,
-                      importPath: leftHandImage,
-                    });
-                    const target = e.target as HTMLImageElement;
-                    const parent = target.parentElement;
-                    if (parent) {
-                      target.style.display = "none";
-                      const placeholder = document.createElement("span");
-                      placeholder.textContent = "Left Hand Image";
-                      parent.appendChild(placeholder);
-                    }
-                  }}
-                />
+      {/* Main Content */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          {/* Step 1: Client Information */}
+          {activeStep === 1 && (
+            <div className="space-y-6">
+              <div className="bg-white shadow rounded-lg p-6">
+                <h2 className="text-lg font-medium text-gray-900 mb-4">
+                  Client Information
+                </h2>
+                <div className="space-y-4">
+                  <div>
+                    <label
+                      htmlFor="name"
+                      className="block text-sm font-medium text-gray-700"
+                    >
+                      Client Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      id="name"
+                      value={clientInfo.name}
+                      onChange={(e) =>
+                        setClientInfo({ ...clientInfo, name: e.target.value })
+                      }
+                      className={`mt-1 block w-full rounded-md border ${
+                        shakeError ? "border-red-500 shake" : "border-gray-300"
+                      } bg-white px-3 py-2 text-gray-900 focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 sm:text-sm`}
+                      required
+                    />
+                    {shakeError && (
+                      <p className="mt-1 text-sm text-red-500">
+                        Client name is required
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="notes"
+                      className="block text-sm font-medium text-gray-700"
+                    >
+                      Notes
+                    </label>
+                    <textarea
+                      id="notes"
+                      value={clientInfo.notes}
+                      onChange={(e) =>
+                        setClientInfo({ ...clientInfo, notes: e.target.value })
+                      }
+                      rows={3}
+                      className="mt-1 block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 sm:text-sm"
+                    />
+                  </div>
+                  <div className="flex justify-between">
+                    <button
+                      type="button"
+                      onClick={() => setIsSelectClientModalOpen(true)}
+                      className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+                    >
+                      Select Existing Client
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveStep(2)}
+                      disabled={!clientInfo.name.trim()}
+                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-gray-600 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    >
+                      Next: Enter Measurements
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
-            <div className="mt-4 space-y-4">
-              {/* Width inputs */}
-              <div className="flex flex-row justify-start gap-1 sm:gap-2">
-                {measurements
-                  .slice(0, 5)
-                  .reverse()
-                  .map((measurement, index) => (
-                    <div
-                      key={`width-${index}`}
-                      className="w-[20%] flex flex-col items-center"
-                    >
-                      <label className="block text-sm sm:text-base font-semibold text-gray-900 mb-1">
-                        {measurement.finger_position.replace("Left ", "")}
-                      </label>
-                      <label className="block text-[9px] sm:text-[10px] font-medium text-gray-500">
-                        Width
-                      </label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={measurement.nail_bed_width || ""}
-                        onChange={(e) =>
-                          handleMeasurementChange(
-                            4 - index,
-                            "nail_bed_width",
-                            e.target.value
-                          )
-                        }
-                        className="mt-1 block w-10 sm:w-14 rounded-md border border-gray-300 bg-white py-1 sm:py-2 px-1 sm:px-3 shadow-sm focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 text-gray-900 text-xs sm:text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+          )}
+
+          {/* Step 2: Measurements */}
+          {activeStep === 2 && (
+            <div className="space-y-6">
+              <div className="bg-white shadow rounded-lg p-6">
+                <h2 className="text-lg font-medium text-gray-900 mb-4">
+                  Enter Measurements
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  {/* Left Hand */}
+                  <div>
+                    <h3 className="text-xl font-bold text-gray-900 mb-4 text-center">
+                      Left Hand
+                    </h3>
+                    <div className="relative w-full max-w-[400px] mx-auto aspect-square">
+                      <img
+                        src={leftHandImage}
+                        alt="Left Hand"
+                        className="object-contain w-full h-full"
                       />
-
-                      {/* Size Matches for Left Hand */}
-                      {Object.keys(matchedSizes).length > 0 &&
-                        measurement.nail_bed_width > 0 && (
-                          <div className="mt-4 w-full space-y-2">
-                            {(() => {
-                              const matches =
-                                matchedSizes[measurement.finger_position];
-                              if (!matches) return null;
-
-                              const comfortFit = matches.width?.[0];
-                              const tightFit = matches.curve?.[0];
-                              let perfectFit = comfortFit;
-
-                              if (
-                                comfortFit &&
-                                tightFit &&
-                                matches.availableSizes
-                              ) {
-                                const comfortSize = parseFloat(
-                                  comfortFit.size_label
-                                );
-                                const tightSize = parseFloat(
-                                  tightFit.size_label
-                                );
-                                if (comfortSize === tightSize) {
-                                  perfectFit = comfortFit;
-                                } else {
-                                  const perfectSize =
-                                    (comfortSize + tightSize) / 2;
-                                  perfectFit =
-                                    matches.availableSizes.find(
-                                      (s) =>
-                                        parseFloat(s.size_label) === perfectSize
-                                    ) || comfortFit;
-                                }
-                              }
-
-                              return (
-                                <>
-                                  {comfortFit && (
-                                    <div
-                                      className="bg-blue-50 rounded p-1 text-center group relative"
-                                      title={`Width: ${
-                                        comfortFit.width
-                                      }mm\nCurve: ${
-                                        comfortFit.inner_curve || "N/A"
-                                      }mm`}
-                                    >
-                                      <div className="text-[10px] font-medium text-blue-900">
-                                        Comfort: {comfortFit.size_label}
-                                      </div>
-                                      <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-12 left-1/2 transform -translate-x-1/2 w-max">
-                                        Width: {comfortFit.width}mm
-                                        <br />
-                                        Curve: {comfortFit.inner_curve || "N/A"}
-                                        mm
-                                      </div>
-                                    </div>
-                                  )}
-                                  {perfectFit && (
-                                    <div
-                                      className="bg-green-50 rounded p-1 text-center ring-1 ring-green-500 group relative"
-                                      title={`Width: ${
-                                        perfectFit.width
-                                      }mm\nCurve: ${
-                                        perfectFit.inner_curve || "N/A"
-                                      }mm`}
-                                    >
-                                      <div className="text-[10px] font-medium text-green-900">
-                                        Perfect: {perfectFit.size_label}
-                                      </div>
-                                      <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-12 left-1/2 transform -translate-x-1/2 w-max">
-                                        Width: {perfectFit.width}mm
-                                        <br />
-                                        Curve: {perfectFit.inner_curve || "N/A"}
-                                        mm
-                                      </div>
-                                    </div>
-                                  )}
-                                  {tightFit && (
-                                    <div
-                                      className="bg-purple-50 rounded p-1 text-center group relative"
-                                      title={`Width: ${
-                                        tightFit.width
-                                      }mm\nCurve: ${
-                                        tightFit.inner_curve || "N/A"
-                                      }mm`}
-                                    >
-                                      <div className="text-[10px] font-medium text-purple-900">
-                                        Tight: {tightFit.size_label}
-                                      </div>
-                                      <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-12 left-1/2 transform -translate-x-1/2 w-max">
-                                        Width: {tightFit.width}mm
-                                        <br />
-                                        Curve: {tightFit.inner_curve || "N/A"}mm
-                                      </div>
-                                    </div>
-                                  )}
-                                </>
-                              );
-                            })()}
+                      {/* Interactive measurement points will be added here */}
+                    </div>
+                    <div className="mt-6">
+                      <div className="flex flex-wrap gap-4">
+                        {measurements.slice(0, 5).map((measurement, index) => (
+                          <div
+                            key={index}
+                            className="flex-1 min-w-[200px] p-3 bg-gray-50 rounded-lg"
+                          >
+                            <div>
+                              <label className="block text-sm font-medium text-gray-900">
+                                {measurement.finger_position.replace(
+                                  "Left ",
+                                  ""
+                                )}
+                              </label>
+                              <div className="mt-1 flex space-x-4">
+                                <div>
+                                  <label className="block text-xs text-gray-500">
+                                    Width (mm)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.1"
+                                    value={measurement.nail_bed_width || ""}
+                                    onChange={(e) =>
+                                      handleMeasurementChange(
+                                        index,
+                                        "nail_bed_width",
+                                        e.target.value
+                                      )
+                                    }
+                                    className="mt-1 block w-20 rounded-md border border-gray-300 bg-white py-2 px-3 text-gray-900 focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 text-sm"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-xs text-gray-500">
+                                    Curve (mm)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.1"
+                                    value={measurement.nail_bed_curve || ""}
+                                    onChange={(e) =>
+                                      handleMeasurementChange(
+                                        index,
+                                        "nail_bed_curve",
+                                        e.target.value
+                                      )
+                                    }
+                                    className="mt-1 block w-20 rounded-md border border-gray-300 bg-white py-2 px-3 text-gray-900 focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 text-sm"
+                                  />
+                                </div>
+                              </div>
+                            </div>
                           </div>
-                        )}
+                        ))}
+                      </div>
                     </div>
-                  ))}
-              </div>
-              {/* Curvature inputs */}
-              <div className="flex flex-row justify-start gap-1 sm:gap-2">
-                {measurements
-                  .slice(0, 5)
-                  .reverse()
-                  .map((measurement, index) => (
-                    <div
-                      key={`curve-${index}`}
-                      className="w-[20%] flex flex-col items-center"
-                    >
-                      <label className="block text-[9px] sm:text-[10px] font-medium text-gray-500">
-                        Curvature
-                      </label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={measurement.nail_bed_curve || ""}
-                        onChange={(e) =>
-                          handleMeasurementChange(
-                            4 - index,
-                            "nail_bed_curve",
-                            e.target.value
-                          )
-                        }
-                        className="mt-1 block w-10 sm:w-14 rounded-md border border-gray-300 bg-white py-1 sm:py-2 px-1 sm:px-3 shadow-sm focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 text-gray-900 text-xs sm:text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  </div>
+
+                  {/* Right Hand */}
+                  <div>
+                    <h3 className="text-xl font-bold text-gray-900 mb-4 text-center">
+                      Right Hand
+                    </h3>
+                    <div className="relative w-full max-w-[400px] mx-auto aspect-square">
+                      <img
+                        src={rightHandImage}
+                        alt="Right Hand"
+                        className="object-contain w-full h-full"
                       />
+                      {/* Interactive measurement points will be added here */}
                     </div>
-                  ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Right Hand */}
-          <div className="w-full lg:w-1/2">
-            <h3 className="text-2xl font-bold text-gray-900 mb-6 text-center">
-              Right
-            </h3>
-            {/* Single hand image for right hand */}
-            <div className="w-full max-w-[400px] mx-auto aspect-w-4 aspect-h-3">
-              <div className="relative w-full h-full flex items-center justify-center">
-                <img
-                  src={rightHandImage}
-                  alt="Right Hand"
-                  className="object-contain w-full h-full max-h-[300px]"
-                  onError={(e) => {
-                    console.log("Image load error details:", {
-                      src: e.currentTarget.src,
-                      path: window.location.pathname,
-                      absolutePath: new URL(
-                        e.currentTarget.src,
-                        window.location.href
-                      ).href,
-                      importPath: rightHandImage,
-                    });
-                    const target = e.target as HTMLImageElement;
-                    const parent = target.parentElement;
-                    if (parent) {
-                      target.style.display = "none";
-                      const placeholder = document.createElement("span");
-                      placeholder.textContent = "Right Hand Image";
-                      parent.appendChild(placeholder);
-                    }
-                  }}
-                />
-              </div>
-            </div>
-            <div className="mt-4 space-y-4">
-              {/* Width inputs */}
-              <div className="flex flex-row justify-start gap-1 sm:gap-2">
-                {measurements.slice(5).map((measurement, index) => (
-                  <div
-                    key={`width-${index + 5}`}
-                    className="w-[20%] flex flex-col items-center"
+                    <div className="mt-6">
+                      <div className="flex flex-wrap gap-4">
+                        {measurements.slice(5).map((measurement, index) => (
+                          <div
+                            key={index + 5}
+                            className="flex-1 min-w-[200px] p-3 bg-gray-50 rounded-lg"
+                          >
+                            <div>
+                              <label className="block text-sm font-medium text-gray-900">
+                                {measurement.finger_position.replace(
+                                  "Right ",
+                                  ""
+                                )}
+                              </label>
+                              <div className="mt-1 flex space-x-4">
+                                <div>
+                                  <label className="block text-xs text-gray-500">
+                                    Width (mm)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.1"
+                                    value={measurement.nail_bed_width || ""}
+                                    onChange={(e) =>
+                                      handleMeasurementChange(
+                                        index + 5,
+                                        "nail_bed_width",
+                                        e.target.value
+                                      )
+                                    }
+                                    className="mt-1 block w-20 rounded-md border border-gray-300 bg-white py-2 px-3 text-gray-900 focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 text-sm"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-xs text-gray-500">
+                                    Curve (mm)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.1"
+                                    value={measurement.nail_bed_curve || ""}
+                                    onChange={(e) =>
+                                      handleMeasurementChange(
+                                        index + 5,
+                                        "nail_bed_curve",
+                                        e.target.value
+                                      )
+                                    }
+                                    className="mt-1 block w-20 rounded-md border border-gray-300 bg-white py-2 px-3 text-gray-900 focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 text-sm"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-6 flex justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setActiveStep(1)}
+                    className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
                   >
-                    <label className="block text-sm sm:text-base font-semibold text-gray-900 mb-1">
-                      {measurement.finger_position.replace("Right ", "")}
-                    </label>
-                    <label className="block text-[9px] sm:text-[10px] font-medium text-gray-500">
-                      Width
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={measurement.nail_bed_width || ""}
-                      onChange={(e) =>
-                        handleMeasurementChange(
-                          index + 5,
-                          "nail_bed_width",
-                          e.target.value
-                        )
-                      }
-                      className="mt-1 block w-10 sm:w-14 rounded-md border border-gray-300 bg-white py-1 sm:py-2 px-1 sm:px-3 shadow-sm focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 text-gray-900 text-xs sm:text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                    />
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveStep(3)}
+                    disabled={!hasAnyMeasurements()}
+                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-gray-600 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                  >
+                    Next: Find Matching Sizes
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
-                    {/* Size Matches for Right Hand */}
-                    {Object.keys(matchedSizes).length > 0 &&
-                      measurement.nail_bed_width > 0 && (
-                        <div className="mt-4 w-full space-y-2">
-                          {(() => {
-                            const matches =
-                              matchedSizes[measurement.finger_position];
-                            if (!matches) return null;
-
-                            const comfortFit = matches.width?.[0];
-                            const tightFit = matches.curve?.[0];
-                            let perfectFit = comfortFit;
-
-                            if (
-                              comfortFit &&
-                              tightFit &&
-                              matches.availableSizes
-                            ) {
-                              const comfortSize = parseFloat(
-                                comfortFit.size_label
-                              );
-                              const tightSize = parseFloat(tightFit.size_label);
-                              if (comfortSize === tightSize) {
-                                perfectFit = comfortFit;
-                              } else {
-                                const perfectSize =
-                                  (comfortSize + tightSize) / 2;
-                                perfectFit =
-                                  matches.availableSizes.find(
-                                    (s) =>
-                                      parseFloat(s.size_label) === perfectSize
-                                  ) || comfortFit;
+          {/* Step 3: Size Matching */}
+          {activeStep === 3 && (
+            <div className="space-y-6">
+              <div className="bg-white shadow rounded-lg p-6">
+                <h2 className="text-lg font-medium text-gray-900 mb-4">
+                  Find Matching Sizes
+                </h2>
+                <div className="space-y-4">
+                  {/* Nail Tip Set Selection */}
+                  <div className="flex items-center space-x-4">
+                    <div className="flex-1">
+                      <Combobox value={selectedSet} onChange={setSelectedSet}>
+                        <div className="relative">
+                          <div className="relative w-full">
+                            <Combobox.Input
+                              className="w-full rounded-md border border-gray-300 bg-white py-2 pl-3 pr-10 text-gray-900 focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 text-base"
+                              onChange={(event) => setQuery(event.target.value)}
+                              displayValue={(set: NailSetDisplay | null) =>
+                                set?.displayName || ""
                               }
-                            }
+                              placeholder="Select or search a nail tip set..."
+                            />
+                            <Combobox.Button className="absolute inset-y-0 right-0 flex items-center pr-2">
+                              <ChevronUpDownIcon
+                                className="h-5 w-5 text-gray-400"
+                                aria-hidden="true"
+                              />
+                            </Combobox.Button>
+                          </div>
 
-                            return (
-                              <>
-                                {comfortFit && (
-                                  <div
-                                    className="bg-blue-50 rounded p-1 text-center group relative"
-                                    title={`Width: ${
-                                      comfortFit.width
-                                    }mm\nCurve: ${
-                                      comfortFit.inner_curve || "N/A"
-                                    }mm`}
-                                  >
-                                    <div className="text-[10px] font-medium text-blue-900">
-                                      Comfort: {comfortFit.size_label}
-                                    </div>
-                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-12 left-1/2 transform -translate-x-1/2 w-max">
-                                      Width: {comfortFit.width}mm
-                                      <br />
-                                      Curve: {comfortFit.inner_curve || "N/A"}mm
-                                    </div>
-                                  </div>
-                                )}
-                                {perfectFit && (
-                                  <div
-                                    className="bg-green-50 rounded p-1 text-center ring-1 ring-green-500 group relative"
-                                    title={`Width: ${
-                                      perfectFit.width
-                                    }mm\nCurve: ${
-                                      perfectFit.inner_curve || "N/A"
-                                    }mm`}
-                                  >
-                                    <div className="text-[10px] font-medium text-green-900">
-                                      Perfect: {perfectFit.size_label}
-                                    </div>
-                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-12 left-1/2 transform -translate-x-1/2 w-max">
-                                      Width: {perfectFit.width}mm
-                                      <br />
-                                      Curve: {perfectFit.inner_curve || "N/A"}mm
-                                    </div>
-                                  </div>
-                                )}
-                                {tightFit && (
-                                  <div
-                                    className="bg-purple-50 rounded p-1 text-center group relative"
-                                    title={`Width: ${
-                                      tightFit.width
-                                    }mm\nCurve: ${
-                                      tightFit.inner_curve || "N/A"
-                                    }mm`}
-                                  >
-                                    <div className="text-[10px] font-medium text-purple-900">
-                                      Tight: {tightFit.size_label}
-                                    </div>
-                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-gray-800 text-white text-xs rounded-md absolute z-10 px-2 py-1 -top-12 left-1/2 transform -translate-x-1/2 w-max">
-                                      Width: {tightFit.width}mm
-                                      <br />
-                                      Curve: {tightFit.inner_curve || "N/A"}mm
-                                    </div>
-                                  </div>
-                                )}
-                              </>
-                            );
-                          })()}
+                          <Combobox.Options className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm">
+                            {filteredNailSets.length === 0 && query !== "" ? (
+                              <div className="relative cursor-default select-none py-2 px-4 text-gray-700">
+                                Nothing found.
+                              </div>
+                            ) : (
+                              filteredNailSets.map((set) => (
+                                <Combobox.Option
+                                  key={set.id}
+                                  className={({ active }) =>
+                                    `relative cursor-default select-none py-2 pl-3 pr-9 ${
+                                      active
+                                        ? "bg-gray-100 text-gray-900"
+                                        : "text-gray-900"
+                                    }`
+                                  }
+                                  value={set}
+                                >
+                                  {set.displayName}
+                                </Combobox.Option>
+                              ))
+                            )}
+                          </Combobox.Options>
                         </div>
-                      )}
+                      </Combobox>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={findMatchingSizes}
+                      disabled={!selectedSet || loading}
+                      className="inline-flex items-center px-4 py-2 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-gray-600 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 whitespace-nowrap"
+                    >
+                      {loading ? "Finding matches..." : "Find Matches"}
+                    </button>
                   </div>
-                ))}
-              </div>
-              {/* Curvature inputs */}
-              <div className="flex flex-row justify-start gap-1 sm:gap-2">
-                {measurements.slice(5).map((measurement, index) => (
-                  <div
-                    key={`curve-${index + 5}`}
-                    className="w-[20%] flex flex-col items-center"
-                  >
-                    <label className="block text-[9px] sm:text-[10px] font-medium text-gray-500">
-                      Curvature
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={measurement.nail_bed_curve || ""}
-                      onChange={(e) =>
-                        handleMeasurementChange(
-                          index + 5,
-                          "nail_bed_curve",
-                          e.target.value
-                        )
+
+                  {/* Size Matching Options */}
+                  <div className="space-y-4">
+                    <div className="flex items-center">
+                      <input
+                        type="checkbox"
+                        id="prefer-smaller-sizes"
+                        checked={preferSmallerSizes}
+                        onChange={(e) =>
+                          setPreferSmallerSizes(e.target.checked)
+                        }
+                        className="h-4 w-4 text-gray-600 focus:ring-gray-500 border-gray-300 rounded"
+                      />
+                      <label
+                        htmlFor="prefer-smaller-sizes"
+                        className="ml-2 block text-sm text-gray-700"
+                      >
+                        Prefer smaller sizes (when unchecked, finds closest
+                        match)
+                      </label>
+                    </div>
+
+                    <div className="flex items-center">
+                      <input
+                        type="checkbox"
+                        id="tapered-compensation"
+                        checked={useTaperedCompensation}
+                        onChange={(e) =>
+                          setUseTaperedCompensation(e.target.checked)
+                        }
+                        className="h-4 w-4 text-gray-600 focus:ring-gray-500 border-gray-300 rounded"
+                      />
+                      <label
+                        htmlFor="tapered-compensation"
+                        className="ml-2 block text-sm text-gray-700"
+                      >
+                        Add 0.5mm for tapered shapes (almond/stiletto)
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Size Table */}
+                  {selectedSet && (
+                    <div className="mt-4 bg-white rounded-lg shadow overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-gray-200">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <th
+                                scope="col"
+                                className="px-2 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center"
+                              >
+                                Size Label
+                              </th>
+                              {allSizes.map((size) => (
+                                <th
+                                  key={size.id}
+                                  scope="col"
+                                  className="px-2 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center"
+                                >
+                                  {size.size_label}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-200">
+                            <tr>
+                              <td className="px-2 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-center">
+                                Width
+                              </td>
+                              {allSizes.map((size) => (
+                                <td
+                                  key={size.id}
+                                  className="px-2 py-4 whitespace-nowrap text-sm text-gray-500 text-center"
+                                >
+                                  {size.width}
+                                </td>
+                              ))}
+                            </tr>
+                            <tr>
+                              <td className="px-2 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-center">
+                                Length
+                              </td>
+                              {allSizes.map((size) => (
+                                <td
+                                  key={size.id}
+                                  className="px-2 py-4 whitespace-nowrap text-sm text-gray-500 text-center"
+                                >
+                                  {size.length}
+                                </td>
+                              ))}
+                            </tr>
+                            <tr>
+                              <td className="px-2 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-center">
+                                IC
+                              </td>
+                              {allSizes.map((size) => (
+                                <td
+                                  key={size.id}
+                                  className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center"
+                                >
+                                  {size.inner_curve || "-"}
+                                </td>
+                              ))}
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Size Matching Results */}
+                  {selectedSet && Object.keys(matchedSizes).length > 0 && (
+                    <div className="mt-6">
+                      <div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-4">
+                        <div className="flex">
+                          <div className="flex-shrink-0">
+                            <svg
+                              className="h-5 w-5 text-blue-400"
+                              viewBox="0 0 20 20"
+                              fill="currentColor"
+                            >
+                              <path
+                                fillRule="evenodd"
+                                d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
+                                clipRule="evenodd"
+                              />
+                            </svg>
+                          </div>
+                          <div className="ml-3">
+                            <p className="text-sm text-blue-700">
+                              All measurements are in millimeters (mm)
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex flex-col lg:flex-row gap-6">
+                        {/* Left Hand Results */}
+                        <div className="flex-1">
+                          <h3 className="text-lg font-medium text-gray-900 mb-4">
+                            Left Hand
+                          </h3>
+                          <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                              <thead className="bg-gray-50">
+                                <tr>
+                                  <th
+                                    scope="col"
+                                    className="px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider"
+                                  >
+                                    Fit Type
+                                  </th>
+                                  {measurements
+                                    .slice(0, 5)
+                                    .map((measurement, index) => (
+                                      <th
+                                        key={index}
+                                        scope="col"
+                                        className="px-2 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                                      >
+                                        {measurement.finger_position.replace(
+                                          "Left ",
+                                          ""
+                                        )}
+                                      </th>
+                                    ))}
+                                </tr>
+                              </thead>
+                              <tbody className="bg-white divide-y divide-gray-200">
+                                {/* Client Measurements Row */}
+                                <tr>
+                                  <td className="px-2 py-3 whitespace-nowrap text-sm font-medium text-gray-900 text-center">
+                                    Client
+                                  </td>
+                                  {measurements
+                                    .slice(0, 5)
+                                    .map((measurement, index) => (
+                                      <td
+                                        key={index}
+                                        className="px-2 py-3 whitespace-nowrap text-sm text-gray-600 text-center"
+                                      >
+                                        <div>
+                                          W: {measurement.nail_bed_width}
+                                        </div>
+                                        {measurement.nail_bed_curve && (
+                                          <div>
+                                            C: {measurement.nail_bed_curve}
+                                          </div>
+                                        )}
+                                      </td>
+                                    ))}
+                                </tr>
+                                {/* Perfect Fit Row */}
+                                <tr>
+                                  <td className="px-2 py-3 whitespace-nowrap text-sm font-medium text-green-700 group relative text-center">
+                                    Perfect
+                                    <svg
+                                      className="inline-block ml-1 h-4 w-4 text-green-700 cursor-help"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      viewBox="0 0 24 24"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                                      />
+                                    </svg>
+                                    <div className="absolute left-full ml-2 top-1/2 transform -translate-y-1/2 w-72 p-3 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-50 whitespace-normal text-center shadow-lg">
+                                      Best overall match considering both width
+                                      and curve
+                                    </div>
+                                  </td>
+                                  {measurements
+                                    .slice(0, 5)
+                                    .map((measurement, index) => (
+                                      <td
+                                        key={index}
+                                        className="px-2 py-3 whitespace-nowrap text-sm text-center"
+                                      >
+                                        {matchedSizes[
+                                          measurement.finger_position
+                                        ]?.availableSizes?.map((size) => (
+                                          <div
+                                            key={`perfect-${size.id}`}
+                                            className="text-green-700"
+                                          >
+                                            <span className="font-bold">
+                                              {size.size_label}
+                                            </span>
+                                            <div className="text-xs text-green-600">
+                                              W: {size.width}
+                                            </div>
+                                            {size.inner_curve && (
+                                              <div className="text-xs text-green-600">
+                                                C: {size.inner_curve}
+                                              </div>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </td>
+                                    ))}
+                                </tr>
+                                {/* Comfort Fit Row */}
+                                <tr>
+                                  <td className="px-2 py-3 whitespace-nowrap text-sm font-medium text-blue-700 group relative text-center">
+                                    Comfort
+                                    <svg
+                                      className="inline-block ml-1 h-4 w-4 text-blue-700 cursor-help"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      viewBox="0 0 24 24"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                                      />
+                                    </svg>
+                                    <div className="absolute left-full ml-2 top-1/2 transform -translate-y-1/2 w-72 p-3 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-50 whitespace-normal text-center shadow-lg">
+                                      Slightly larger fit for more comfort
+                                    </div>
+                                  </td>
+                                  {measurements
+                                    .slice(0, 5)
+                                    .map((measurement, index) => (
+                                      <td
+                                        key={index}
+                                        className="px-2 py-3 whitespace-nowrap text-sm text-center"
+                                      >
+                                        {matchedSizes[
+                                          measurement.finger_position
+                                        ]?.curve?.map((size) => (
+                                          <div
+                                            key={`comfort-${size.id}`}
+                                            className="text-blue-700"
+                                          >
+                                            <span className="font-bold">
+                                              {size.size_label}
+                                            </span>
+                                            <div className="text-xs text-blue-600">
+                                              W: {size.width}
+                                            </div>
+                                            {size.inner_curve && (
+                                              <div className="text-xs text-blue-600">
+                                                C: {size.inner_curve}
+                                              </div>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </td>
+                                    ))}
+                                </tr>
+                                {/* Tight Fit Row */}
+                                <tr>
+                                  <td className="px-2 py-3 whitespace-nowrap text-sm font-medium text-yellow-700 group relative text-center">
+                                    Tight
+                                    <svg
+                                      className="inline-block ml-1 h-4 w-4 text-yellow-700 cursor-help"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      viewBox="0 0 24 24"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                                      />
+                                    </svg>
+                                    <div className="absolute left-full ml-2 top-1/2 transform -translate-y-1/2 w-72 p-3 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-50 whitespace-normal text-center shadow-lg">
+                                      Snug fit for a more secure hold
+                                    </div>
+                                  </td>
+                                  {measurements
+                                    .slice(0, 5)
+                                    .map((measurement, index) => (
+                                      <td
+                                        key={index}
+                                        className={`px-2 py-3 whitespace-nowrap text-sm text-center ${
+                                          !measurement.nail_bed_curve
+                                            ? "opacity-50"
+                                            : ""
+                                        }`}
+                                      >
+                                        {matchedSizes[
+                                          measurement.finger_position
+                                        ]?.width?.map((size) => (
+                                          <div
+                                            key={`tight-${size.id}`}
+                                            className={`text-yellow-700 ${
+                                              !measurement.nail_bed_curve
+                                                ? "cursor-not-allowed"
+                                                : ""
+                                            }`}
+                                          >
+                                            <span className="font-bold">
+                                              {size.size_label}
+                                            </span>
+                                            <div className="text-xs text-yellow-600">
+                                              W: {size.width}
+                                            </div>
+                                            {size.inner_curve && (
+                                              <div className="text-xs text-yellow-600">
+                                                C: {size.inner_curve}
+                                              </div>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </td>
+                                    ))}
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* Right Hand Results */}
+                        <div className="flex-1">
+                          <h3 className="text-lg font-medium text-gray-900 mb-4">
+                            Right Hand
+                          </h3>
+                          <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                              <thead className="bg-gray-50">
+                                <tr>
+                                  <th
+                                    scope="col"
+                                    className="px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider"
+                                  >
+                                    Fit Type
+                                  </th>
+                                  {measurements
+                                    .slice(5)
+                                    .map((measurement, index) => (
+                                      <th
+                                        key={index}
+                                        scope="col"
+                                        className="px-2 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                                      >
+                                        {measurement.finger_position.replace(
+                                          "Right ",
+                                          ""
+                                        )}
+                                      </th>
+                                    ))}
+                                </tr>
+                              </thead>
+                              <tbody className="bg-white divide-y divide-gray-200">
+                                {/* Client Measurements Row */}
+                                <tr>
+                                  <td className="px-2 py-3 whitespace-nowrap text-sm font-medium text-gray-900 text-center">
+                                    Client
+                                  </td>
+                                  {measurements
+                                    .slice(5)
+                                    .map((measurement, index) => (
+                                      <td
+                                        key={index}
+                                        className="px-2 py-3 whitespace-nowrap text-sm text-gray-600 text-center"
+                                      >
+                                        <div>
+                                          W: {measurement.nail_bed_width}
+                                        </div>
+                                        {measurement.nail_bed_curve && (
+                                          <div>
+                                            C: {measurement.nail_bed_curve}
+                                          </div>
+                                        )}
+                                      </td>
+                                    ))}
+                                </tr>
+                                {/* Perfect Fit Row */}
+                                <tr>
+                                  <td className="px-2 py-3 whitespace-nowrap text-sm font-medium text-green-700 group relative text-center">
+                                    Perfect
+                                    <svg
+                                      className="inline-block ml-1 h-4 w-4 text-green-700 cursor-help"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      viewBox="0 0 24 24"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                                      />
+                                    </svg>
+                                    <div className="absolute left-full ml-2 top-1/2 transform -translate-y-1/2 w-72 p-3 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-50 whitespace-normal text-center shadow-lg">
+                                      Best overall match considering both width
+                                      and curve
+                                    </div>
+                                  </td>
+                                  {measurements
+                                    .slice(5)
+                                    .map((measurement, index) => (
+                                      <td
+                                        key={index}
+                                        className="px-2 py-3 whitespace-nowrap text-sm text-center"
+                                      >
+                                        {matchedSizes[
+                                          measurement.finger_position
+                                        ]?.availableSizes?.map((size) => (
+                                          <div
+                                            key={`perfect-${size.id}`}
+                                            className="text-green-700"
+                                          >
+                                            <span className="font-bold">
+                                              {size.size_label}
+                                            </span>
+                                            <div className="text-xs text-green-600">
+                                              W: {size.width}
+                                            </div>
+                                            {size.inner_curve && (
+                                              <div className="text-xs text-green-600">
+                                                C: {size.inner_curve}
+                                              </div>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </td>
+                                    ))}
+                                </tr>
+                                {/* Comfort Fit Row */}
+                                <tr>
+                                  <td className="px-2 py-3 whitespace-nowrap text-sm font-medium text-blue-700 group relative text-center">
+                                    Comfort
+                                    <svg
+                                      className="inline-block ml-1 h-4 w-4 text-blue-700 cursor-help"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      viewBox="0 0 24 24"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                                      />
+                                    </svg>
+                                    <div className="absolute left-full ml-2 top-1/2 transform -translate-y-1/2 w-72 p-3 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-50 whitespace-normal text-center shadow-lg">
+                                      Slightly larger fit for more comfort
+                                    </div>
+                                  </td>
+                                  {measurements
+                                    .slice(5)
+                                    .map((measurement, index) => (
+                                      <td
+                                        key={index}
+                                        className="px-2 py-3 whitespace-nowrap text-sm text-center"
+                                      >
+                                        {matchedSizes[
+                                          measurement.finger_position
+                                        ]?.curve?.map((size) => (
+                                          <div
+                                            key={`comfort-${size.id}`}
+                                            className="text-blue-700"
+                                          >
+                                            <span className="font-bold">
+                                              {size.size_label}
+                                            </span>
+                                            <div className="text-xs text-blue-600">
+                                              W: {size.width}
+                                            </div>
+                                            {size.inner_curve && (
+                                              <div className="text-xs text-blue-600">
+                                                C: {size.inner_curve}
+                                              </div>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </td>
+                                    ))}
+                                </tr>
+                                {/* Tight Fit Row */}
+                                <tr>
+                                  <td className="px-2 py-3 whitespace-nowrap text-sm font-medium text-yellow-700 group relative text-center">
+                                    Tight
+                                    <svg
+                                      className="inline-block ml-1 h-4 w-4 text-yellow-700 cursor-help"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      viewBox="0 0 24 24"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                                      />
+                                    </svg>
+                                    <div className="absolute left-full ml-2 top-1/2 transform -translate-y-1/2 w-72 p-3 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-50 whitespace-normal text-center shadow-lg">
+                                      Snug fit for a more secure hold
+                                    </div>
+                                  </td>
+                                  {measurements
+                                    .slice(5)
+                                    .map((measurement, index) => (
+                                      <td
+                                        key={index}
+                                        className={`px-2 py-3 whitespace-nowrap text-sm text-center ${
+                                          !measurement.nail_bed_curve
+                                            ? "opacity-50"
+                                            : ""
+                                        }`}
+                                      >
+                                        {matchedSizes[
+                                          measurement.finger_position
+                                        ]?.width?.map((size) => (
+                                          <div
+                                            key={`tight-${size.id}`}
+                                            className={`text-yellow-700 ${
+                                              !measurement.nail_bed_curve
+                                                ? "cursor-not-allowed"
+                                                : ""
+                                            }`}
+                                          >
+                                            <span className="font-bold">
+                                              {size.size_label}
+                                            </span>
+                                            <div className="text-xs text-yellow-600">
+                                              W: {size.width}
+                                            </div>
+                                            {size.inner_curve && (
+                                              <div className="text-xs text-yellow-600">
+                                                C: {size.inner_curve}
+                                              </div>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </td>
+                                    ))}
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-6 flex justify-between">
+                    <button
+                      type="button"
+                      onClick={() => setActiveStep(2)}
+                      className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={isUpdating ? handleUpdateClick : handleSaveClick}
+                      disabled={
+                        !clientInfo.name.trim() ||
+                        loading ||
+                        saveStatus === "saving" ||
+                        (isUpdating && !hasMeasurementsChanged()) ||
+                        (!isUpdating && !hasAnyMeasurements())
                       }
-                      className="mt-1 block w-10 sm:w-14 rounded-md border border-gray-300 bg-white py-1 sm:py-2 px-1 sm:px-3 shadow-sm focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 text-gray-900 text-xs sm:text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                    />
+                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-gray-600 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    >
+                      {saveStatus === "saving"
+                        ? "Saving..."
+                        : isUpdating
+                        ? "Update Measurements"
+                        : "Save Measurements"}
+                    </button>
                   </div>
-                ))}
+                </div>
               </div>
             </div>
-          </div>
-        </div>
-
-        {/* Help Text */}
-        {Object.keys(matchedSizes).length > 0 && (
-          <div className="mt-6 px-6">
-            <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-600">
-              <p className="font-medium mb-2">Size Match Guide:</p>
-              <ul className="space-y-1 list-disc pl-5">
-                <li>
-                  <span className="text-blue-700 font-medium">
-                    Comfort Fit:
-                  </span>{" "}
-                  Prioritizes less pressure on natural nail
-                </li>
-                <li>
-                  <span className="text-green-700 font-medium">
-                    Perfect Fit:
-                  </span>{" "}
-                  Balances between comfort and adhesion
-                </li>
-                <li>
-                  <span className="text-purple-700 font-medium">
-                    Tight Fit:
-                  </span>{" "}
-                  Prioritizes better adhesion
-                </li>
-              </ul>
-            </div>
-          </div>
-        )}
-
-        <p className="text-sm text-gray-700 px-6 mt-4">
-          *All measurements are in millimeters
-        </p>
-
-        {/* Client Name Input */}
-        <div className="px-6">
-          <label
-            htmlFor="name"
-            className="block text-sm font-medium text-gray-700"
-          >
-            Client Name <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="text"
-            id="name"
-            value={clientInfo.name}
-            onChange={(e) =>
-              setClientInfo({ ...clientInfo, name: e.target.value })
-            }
-            className={`mt-1 block w-full rounded-md border ${
-              shakeError ? "border-red-500 shake" : "border-gray-300"
-            } bg-white px-3 py-2 text-gray-900 focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 sm:text-sm`}
-            required
-          />
-          {shakeError && (
-            <p className="mt-1 text-sm text-red-500">Client name is required</p>
           )}
-        </div>
-
-        {/* Notes Input */}
-        <div className="px-6">
-          <label
-            htmlFor="notes"
-            className="block text-sm font-medium text-gray-700"
-          >
-            Notes
-          </label>
-          <textarea
-            id="notes"
-            value={clientInfo.notes}
-            onChange={(e) =>
-              setClientInfo({ ...clientInfo, notes: e.target.value })
-            }
-            rows={3}
-            className="mt-1 block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-500 sm:text-sm"
-          />
-        </div>
-
-        <div className="flex justify-between px-6 w-full items-center gap-4">
-          {/* Select Client Button */}
-          <button
-            type="button"
-            onClick={() => setIsSelectClientModalOpen(true)}
-            className=" inline-flex items-center justify-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
-          >
-            Select Client
-          </button>
-          {/* Save Status and Button */}
-          {saveStatus === "saved" && (
-            <span className="text-green-600 text-sm">
-              Measurements saved successfully!
-            </span>
-          )}
-          {saveStatus === "error" && (
-            <span className="text-red-600 text-sm">
-              Error saving measurements
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={isUpdating ? handleUpdateClick : handleSaveClick}
-            disabled={
-              !clientInfo.name.trim() ||
-              loading ||
-              saveStatus === "saving" ||
-              (isUpdating && !hasMeasurementsChanged()) ||
-              (!isUpdating && !hasAnyMeasurements())
-            }
-            className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white ${
-              !clientInfo.name.trim() ||
-              loading ||
-              saveStatus === "saving" ||
-              (isUpdating && !hasMeasurementsChanged()) ||
-              (!isUpdating && !hasAnyMeasurements())
-                ? "bg-gray-400 cursor-not-allowed"
-                : "bg-gray-600 hover:bg-gray-700"
-            } focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500`}
-          >
-            {saveStatus === "saving"
-              ? "Saving..."
-              : isUpdating
-              ? "Update Measurements"
-              : "Save Measurements"}
-          </button>
         </div>
       </div>
 

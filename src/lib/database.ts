@@ -44,89 +44,108 @@ export async function getTableStructure(tableName: string) {
 
 // Example function to fetch data from a table
 export async function fetchData<T>(
-  tableName: string,
-  filter?: string,
-  query?: {
-    select?: string;
-    eq?: { column: string; value: any };
-    order?: { column: string; ascending?: boolean };
+  table: string,
+  condition?: string,
+  options?: {
+    eq?: { column: string; value: string | number };
+    order?: { column: string; ascending: boolean };
   }
-) {
-  let queryBuilder = supabase.from(tableName).select(query?.select || "*");
+): Promise<T[]> {
+  try {
+    let query = supabase.from(table).select("*");
 
-  if (filter) {
-    const [column, operator, value] = filter.split(/\s*(=|!=|>|<|>=|<=)\s*/);
-    if (operator === "=") {
-      queryBuilder = queryBuilder.eq(column, value.replace(/^'|'$/g, ""));
+    if (condition) {
+      query = query.filter(condition);
     }
-  }
 
-  if (query?.eq) {
-    queryBuilder = queryBuilder.eq(query.eq.column, query.eq.value);
-  }
+    if (options?.eq) {
+      query = query.eq(options.eq.column, options.eq.value);
+    }
 
-  if (query?.order) {
-    queryBuilder = queryBuilder.order(query.order.column, {
-      ascending: query.order.ascending ?? true,
-    });
-  }
+    if (options?.order) {
+      query = query.order(options.order.column, {
+        ascending: options.order.ascending,
+      });
+    }
 
-  const { data, error } = await queryBuilder;
+    const { data, error } = await query;
 
-  if (error) {
+    if (error) {
+      console.error(`Error fetching ${table}:`, error);
+      throw error;
+    }
+
+    return data as T[];
+  } catch (error) {
+    console.error(`Error in fetchData for ${table}:`, error);
     throw error;
   }
-
-  return data as T[];
 }
 
 // Example function to insert data
-export async function insertData<T>(tableName: string, data: Partial<T>) {
-  const { data: result, error } = await supabase
-    .from(tableName)
-    .insert(data)
-    .select();
+export async function insertData<T>(
+  table: string,
+  data: Partial<T>
+): Promise<T> {
+  try {
+    const { data: result, error } = await supabase
+      .from(table)
+      .insert(data)
+      .select()
+      .single();
 
-  if (error) {
+    if (error) {
+      console.error(`Error inserting into ${table}:`, error);
+      throw error;
+    }
+
+    return result as T;
+  } catch (error) {
+    console.error(`Error in insertData for ${table}:`, error);
     throw error;
   }
-
-  return result as T[];
 }
 
 // Example function to update data
 export async function updateData<T>(
-  tableName: string,
-  id: string | number,
+  table: string,
+  id: number | string,
   data: Partial<T>
-) {
-  const { data: result, error } = await supabase
-    .from(tableName)
-    .update(data)
-    .eq("id", id)
-    .select();
+): Promise<T> {
+  try {
+    const { data: result, error } = await supabase
+      .from(table)
+      .update(data)
+      .eq("id", id)
+      .select()
+      .single();
 
-  if (error) {
+    if (error) {
+      console.error(`Error updating ${table}:`, error);
+      throw error;
+    }
+
+    return result as T;
+  } catch (error) {
+    console.error(`Error in updateData for ${table}:`, error);
     throw error;
   }
-
-  return result as T[];
 }
 
 // Example function to delete data
-export async function deleteData(tableName: string, filter?: string) {
-  let queryBuilder = supabase.from(tableName).delete();
+export async function deleteData(
+  table: string,
+  id: number | string
+): Promise<void> {
+  try {
+    const { error } = await supabase.from(table).delete().eq("id", id);
 
-  if (filter) {
-    const [column, operator, value] = filter.split(/\s*(=|!=|>|<|>=|<=)\s*/);
-    if (operator === "=") {
-      queryBuilder = queryBuilder.eq(column, value.replace(/^'|'$/g, ""));
+    if (error) {
+      console.error(`Error deleting from ${table}:`, error);
+      throw error;
     }
-  }
-
-  const { error } = await queryBuilder;
-
-  if (error) {
+  } catch (error) {
+    console.error(`Error in deleteData for ${table}:`, error);
     throw error;
   }
 }

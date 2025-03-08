@@ -31,3 +31,13 @@ ALTER TABLE "Clients" ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES auth.u
 
 
 
+
+
+
+
+
+
+
+
+
+

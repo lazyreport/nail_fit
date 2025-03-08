@@ -130,35 +130,56 @@ export function RelativeMeasuring({
       color: string,
       label?: string
     ) => {
+      const img = imageRef.current;
+      if (!img) return;
+
+      // Calculate image dimensions
+      const imageAspectRatio = img.height / img.width;
+      const canvasAspectRatio = canvas.height / canvas.width;
+
+      let drawWidth, drawHeight;
+      if (imageAspectRatio < canvasAspectRatio) {
+        drawWidth = canvas.width;
+        drawHeight = canvas.width * imageAspectRatio;
+      } else {
+        drawHeight = canvas.height;
+        drawWidth = canvas.height / imageAspectRatio;
+      }
+
+      // Scale points from image coordinates to canvas coordinates
+      const scalePoint = (point: Point): Point => ({
+        x: (point.x * drawWidth) / img.width,
+        y: (point.y * drawHeight) / img.height,
+      });
+
+      const startPoint = scalePoint(measurement.startPoint);
+      const endPoint = scalePoint(measurement.endPoint);
+
       // Draw main line
       ctx.beginPath();
-      ctx.moveTo(measurement.startPoint.x, measurement.startPoint.y);
-      ctx.lineTo(measurement.endPoint.x, measurement.endPoint.y);
+      ctx.moveTo(startPoint.x, startPoint.y);
+      ctx.lineTo(endPoint.x, endPoint.y);
       ctx.strokeStyle = color;
-      ctx.lineWidth = 1 / viewTransform.scale; // Adjust line width for zoom
+      ctx.lineWidth = 1 / viewTransform.scale;
       ctx.stroke();
 
       // Draw perpendicular end lines for precise measurement
       const angle = Math.atan2(
-        measurement.endPoint.y - measurement.startPoint.y,
-        measurement.endPoint.x - measurement.startPoint.x
+        endPoint.y - startPoint.y,
+        endPoint.x - startPoint.x
       );
       const perpendicularAngle = angle + Math.PI / 2;
-      const lineLength = 6 / viewTransform.scale; // Adjust length for zoom
+      const lineLength = 6 / viewTransform.scale;
 
       // Draw start perpendicular line
       ctx.beginPath();
       ctx.moveTo(
-        measurement.startPoint.x +
-          Math.cos(perpendicularAngle) * (lineLength / 2),
-        measurement.startPoint.y +
-          Math.sin(perpendicularAngle) * (lineLength / 2)
+        startPoint.x + Math.cos(perpendicularAngle) * (lineLength / 2),
+        startPoint.y + Math.sin(perpendicularAngle) * (lineLength / 2)
       );
       ctx.lineTo(
-        measurement.startPoint.x -
-          Math.cos(perpendicularAngle) * (lineLength / 2),
-        measurement.startPoint.y -
-          Math.sin(perpendicularAngle) * (lineLength / 2)
+        startPoint.x - Math.cos(perpendicularAngle) * (lineLength / 2),
+        startPoint.y - Math.sin(perpendicularAngle) * (lineLength / 2)
       );
       ctx.strokeStyle = color;
       ctx.lineWidth = 1 / viewTransform.scale;
@@ -167,21 +188,19 @@ export function RelativeMeasuring({
       // Draw end perpendicular line
       ctx.beginPath();
       ctx.moveTo(
-        measurement.endPoint.x +
-          Math.cos(perpendicularAngle) * (lineLength / 2),
-        measurement.endPoint.y + Math.sin(perpendicularAngle) * (lineLength / 2)
+        endPoint.x + Math.cos(perpendicularAngle) * (lineLength / 2),
+        endPoint.y + Math.sin(perpendicularAngle) * (lineLength / 2)
       );
       ctx.lineTo(
-        measurement.endPoint.x -
-          Math.cos(perpendicularAngle) * (lineLength / 2),
-        measurement.endPoint.y - Math.sin(perpendicularAngle) * (lineLength / 2)
+        endPoint.x - Math.cos(perpendicularAngle) * (lineLength / 2),
+        endPoint.y - Math.sin(perpendicularAngle) * (lineLength / 2)
       );
       ctx.stroke();
 
       // Draw measurement value if provided
       if (label) {
-        const midX = (measurement.startPoint.x + measurement.endPoint.x) / 2;
-        const midY = (measurement.startPoint.y + measurement.endPoint.y) / 2;
+        const midX = (startPoint.x + endPoint.x) / 2;
+        const midY = (startPoint.y + endPoint.y) / 2;
 
         // Save current transform for text
         const currentTransform = ctx.getTransform();
@@ -362,6 +381,7 @@ export function RelativeMeasuring({
     if (!canvasRef.current || !imageRef.current) return null;
 
     const canvas = canvasRef.current;
+    const img = imageRef.current;
     const rect = canvas.getBoundingClientRect();
 
     // Get mouse position relative to canvas
@@ -372,9 +392,34 @@ export function RelativeMeasuring({
     const canvasX = (mouseX * canvas.width) / rect.width;
     const canvasY = (mouseY * canvas.height) / rect.height;
 
-    // Apply inverse transform to get coordinates in image space
-    const x = (canvasX - viewTransform.offsetX) / viewTransform.scale;
-    const y = (canvasY - viewTransform.offsetY) / viewTransform.scale;
+    // Calculate image dimensions and position
+    const imageAspectRatio = img.height / img.width;
+    const canvasAspectRatio = canvas.height / canvas.width;
+
+    let drawWidth, drawHeight;
+    if (imageAspectRatio < canvasAspectRatio) {
+      drawWidth = canvas.width;
+      drawHeight = canvas.width * imageAspectRatio;
+    } else {
+      drawHeight = canvas.height;
+      drawWidth = canvas.height / imageAspectRatio;
+    }
+
+    // Calculate image offset in canvas
+    const offsetX = (canvas.width - drawWidth) / 2;
+    const offsetY = (canvas.height - drawHeight) / 2;
+
+    // Remove canvas offset and view transform to get coordinates relative to image
+    const imageX =
+      (canvasX - viewTransform.offsetX - offsetX * viewTransform.scale) /
+      viewTransform.scale;
+    const imageY =
+      (canvasY - viewTransform.offsetY - offsetY * viewTransform.scale) /
+      viewTransform.scale;
+
+    // Scale coordinates to match original image dimensions
+    const x = (imageX * img.width) / drawWidth;
+    const y = (imageY * img.height) / drawHeight;
 
     return { x, y };
   };

@@ -45,13 +45,25 @@ export async function getTableStructure(tableName: string) {
 // Example function to fetch data from a table
 export async function fetchData<T>(
   table: string,
-  condition?: string
+  condition?: string,
+  options?: { limit?: number; offset?: number }
 ): Promise<T[]> {
   try {
     let query = supabase.from(table).select("*");
 
     if (condition) {
-      query = query.filter(condition);
+      const [column, operator, value] = condition.split(/\s*(=|!=|>|<|>=|<=)\s*/);
+      if (operator === "=") {
+        query = query.eq(column, value.replace(/^'|'$/g, ""));
+      }
+    }
+
+    if (options?.limit) {
+      query = query.limit(options.limit);
+    }
+
+    if (options?.offset) {
+      query = query.range(options.offset, options.offset + (options.limit || 10) - 1);
     }
 
     const { data, error } = await query;
@@ -118,5 +130,3 @@ export async function deleteData(tableName: string, filter?: string) {
     throw error;
   }
 }
-
-const loadedBrands = await fetchData<Brand>("Brand");

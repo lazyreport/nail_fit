@@ -17,7 +17,6 @@ export function AddBrandModal({
   const [brand, setBrand] = useState<Partial<Brand>>({
     name: "",
     website: "",
-    description: "",
   });
   const [logoUrl, setLogoUrl] = useState("");
   const [loading, setLoading] = useState(false);
@@ -29,18 +28,17 @@ export function AddBrandModal({
     setError(null);
 
     try {
-      const [brand] = await insertData<Brand>("Brand", {
+      const [newBrand] = await insertData<Brand>("Brand", {
         name: brand.name,
         website: brand.website,
         logo_url: logoUrl,
       });
-      onBrandAdded(brand);
+      onBrandAdded(newBrand);
       onClose();
       // Reset form
       setBrand({
         name: "",
         website: "",
-        description: "",
       });
       setLogoUrl("");
     } catch (err) {

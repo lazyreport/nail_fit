@@ -7,6 +7,7 @@ interface Client {
   id: number;
   name: string;
   created_at: string;
+  nail_tech_id: string;
 }
 
 interface SelectClientModalProps {
@@ -26,15 +27,16 @@ export function SelectClientModal({
   useEffect(() => {
     async function loadClients() {
       try {
+        setLoading(true);
         const {
           data: { user },
         } = await supabase.auth.getUser();
+
         if (!user) return;
 
         const clients = await fetchData<Client>(
           "Clients",
-          `nail_tech_id = '${user.id}'`,
-          { order: { column: "created_at", ascending: false } }
+          `nail_tech_id = '${user.id}' ORDER BY name ASC`
         );
         setClients(clients);
       } catch (error) {
@@ -44,10 +46,8 @@ export function SelectClientModal({
       }
     }
 
-    if (isOpen) {
-      loadClients();
-    }
-  }, [isOpen]);
+    loadClients();
+  }, []);
 
   return (
     <Transition.Root show={isOpen} as={Fragment}>

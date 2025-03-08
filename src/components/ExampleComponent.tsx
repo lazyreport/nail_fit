@@ -53,7 +53,7 @@ export function ExampleComponent() {
 
   async function handleDeleteTodo(id: number) {
     try {
-      await deleteData("todos", id);
+      await deleteData("todos", `id = ${id}`);
       loadTodos();
     } catch (error) {
       console.error("Error deleting todo:", error);

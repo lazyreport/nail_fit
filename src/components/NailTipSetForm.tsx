@@ -54,13 +54,6 @@ export function NailTipSetForm({ initialData }: NailTipSetFormProps) {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isAddBrandModalOpen, setIsAddBrandModalOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [nailTipSet, setNailTipSet] = useState<Partial<NailTipSet>>({
-    name: initialData?.name || "",
-    shape: initialData?.shape || "",
-    length: initialData?.length || "",
-    brand_id: initialData?.brand?.id,
-    image_url: initialData?.image_url || "",
-  });
 
   useEffect(() => {
     loadBrands();

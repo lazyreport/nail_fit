@@ -118,3 +118,5 @@ export async function deleteData(tableName: string, filter?: string) {
     throw error;
   }
 }
+
+const loadedBrands = await fetchData<Brand>("Brand");

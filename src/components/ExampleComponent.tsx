@@ -17,9 +17,7 @@ export function ExampleComponent() {
 
   async function loadTodos() {
     try {
-      const data = await fetchData<Todo>("todos", {
-        order: { column: "created_at", ascending: false },
-      });
+      const data = await fetchData<Todo>("todos", "ORDER BY created_at DESC");
       setTodos(data);
     } catch (error) {
       console.error("Error loading todos:", error);

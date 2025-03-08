@@ -14,8 +14,11 @@ export function AddBrandModal({
   onClose,
   onBrandAdded,
 }: AddBrandModalProps) {
-  const [name, setName] = useState("");
-  const [website, setWebsite] = useState("");
+  const [brand, setBrand] = useState<Partial<Brand>>({
+    name: "",
+    website: "",
+    description: "",
+  });
   const [logoUrl, setLogoUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,15 +30,18 @@ export function AddBrandModal({
 
     try {
       const [brand] = await insertData<Brand>("Brand", {
-        name,
-        website,
+        name: brand.name,
+        website: brand.website,
         logo_url: logoUrl,
       });
       onBrandAdded(brand);
       onClose();
       // Reset form
-      setName("");
-      setWebsite("");
+      setBrand({
+        name: "",
+        website: "",
+        description: "",
+      });
       setLogoUrl("");
     } catch (err) {
       setError("Failed to add brand");
@@ -97,8 +103,10 @@ export function AddBrandModal({
                       <input
                         type="text"
                         id="name"
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
+                        value={brand.name}
+                        onChange={(e) =>
+                          setBrand({ ...brand, name: e.target.value })
+                        }
                         className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
                         required
                       />
@@ -114,8 +122,10 @@ export function AddBrandModal({
                       <input
                         type="url"
                         id="website"
-                        value={website}
-                        onChange={(e) => setWebsite(e.target.value)}
+                        value={brand.website}
+                        onChange={(e) =>
+                          setBrand({ ...brand, website: e.target.value })
+                        }
                         className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
                       />
                     </div>

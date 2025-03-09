@@ -380,38 +380,49 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
         return;
       }
 
-      // Delete only the changed measurements
-      const fingerPositionsToUpdate = changedMeasurements.map(
-        (m) => m.finger_position
-      );
-      const { error: deleteError } = await supabase
-        .from("Measurements")
-        .delete()
-        .eq("client_id", selectedClientId)
-        .in("finger_position", fingerPositionsToUpdate);
+      // For each changed measurement, update or insert
+      for (const measurement of changedMeasurements) {
+        // First, try to find an existing measurement for this finger position
+        const { data: existingMeasurements } = await supabase
+          .from("Measurements")
+          .select("id")
+          .eq("client_id", selectedClientId)
+          .eq("finger_position", measurement.finger_position)
+          .order("date_measured", { ascending: false })
+          .limit(1);
 
-      if (deleteError) {
-        throw new Error("Failed to delete old measurements");
-      }
+        const measurementData = {
+          finger_position: measurement.finger_position,
+          nail_bed_width: Number(measurement.nail_bed_width) || 0,
+          nail_bed_curve: measurement.nail_bed_curve
+            ? Number(measurement.nail_bed_curve)
+            : null,
+          date_measured: new Date().toISOString(),
+          client_id: selectedClientId,
+        };
 
-      // Insert only the changed measurements
-      const measurementsToInsert = changedMeasurements.map((measurement) => ({
-        finger_position: measurement.finger_position,
-        nail_bed_width: Number(measurement.nail_bed_width) || 0,
-        nail_bed_curve: measurement.nail_bed_curve
-          ? Number(measurement.nail_bed_curve)
-          : null,
-        date_measured: new Date().toISOString(),
-        client_id: selectedClientId,
-      }));
+        if (existingMeasurements && existingMeasurements.length > 0) {
+          // Update existing measurement
+          const { error: updateError } = await supabase
+            .from("Measurements")
+            .update(measurementData)
+            .eq("id", existingMeasurements[0].id);
 
-      const { error: measurementsError } = await supabase
-        .from("Measurements")
-        .insert(measurementsToInsert);
+          if (updateError) {
+            console.error("Update error:", updateError);
+            throw new Error("Failed to update measurement");
+          }
+        } else {
+          // Insert new measurement
+          const { error: insertError } = await supabase
+            .from("Measurements")
+            .insert(measurementData);
 
-      if (measurementsError) {
-        console.error("Measurements error:", measurementsError);
-        throw new Error("Failed to save measurements");
+          if (insertError) {
+            console.error("Insert error:", insertError);
+            throw new Error("Failed to insert measurement");
+          }
+        }
       }
 
       // Deduct credit if not admin

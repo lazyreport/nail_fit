@@ -533,30 +533,30 @@ export function NailFitting({ clientId: initialClientId }: NailFittingProps) {
             };
           });
 
-          // Sort by combined score
+          // Sort by combined score for perfect fit
           sizesWithScores.sort((a, b) => a.score - b.score);
-
-          // Find comfort fit (slightly larger width)
-          const comfortFit = sizesWithScores.find(
-            (size) => size.width >= targetWidth
-          );
-
-          // Find tight fit (slightly smaller width)
-          const tightFit = sizesWithScores.find(
-            (size) => size.width <= targetWidth
-          );
-
-          // Perfect fit is the size with the best overall score
           const perfectFit = sizesWithScores[0];
 
-          matchResult.width = tightFit ? [tightFit] : undefined;
-          matchResult.curve = comfortFit ? [comfortFit] : undefined;
+          // Sort by width difference for comfort fit
+          const sizesByWidth = [...sizesWithScores].sort(
+            (a, b) => a.widthDiff - b.widthDiff
+          );
+          const comfortFit = sizesByWidth[0];
+
+          // Sort by curve difference for tight fit (if curve measurement exists)
+          let tightFit;
+          if (measurement.nail_bed_curve) {
+            const sizesByCurve = [...sizesWithScores].sort(
+              (a, b) => a.curveDiff - b.curveDiff
+            );
+            tightFit = sizesByCurve[0];
+          }
 
           // Store the matches
           matches[measurement.finger_position] = {
             ...matchResult,
-            width: tightFit ? [tightFit] : undefined,
-            curve: comfortFit ? [comfortFit] : undefined,
+            width: comfortFit ? [comfortFit] : undefined,
+            curve: tightFit ? [tightFit] : undefined,
             availableSizes: [perfectFit],
           };
         }

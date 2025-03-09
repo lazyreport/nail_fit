@@ -49,7 +49,7 @@ export async function fetchData<T>(
   options?: { 
     limit?: number; 
     offset?: number;
-    orderBy?: string;
+    orderBy?: { column: string; ascending?: boolean };
   }
 ): Promise<T[]> {
   try {
@@ -69,13 +69,17 @@ export async function fetchData<T>(
 
       // Apply ORDER BY if it was in the condition string
       if (orderParts.length > 0) {
-        query = query.order(orderParts.join(" ORDER BY "));
+        const orderPart = orderParts.join(" ORDER BY ");
+        const [column, direction] = orderPart.split(/\s+/);
+        query = query.order(column, { ascending: direction?.toLowerCase() !== 'desc' });
       }
     }
 
     // Apply options
     if (options?.orderBy) {
-      query = query.order(options.orderBy);
+      query = query.order(options.orderBy.column, { 
+        ascending: options.orderBy.ascending !== false 
+      });
     }
 
     if (options?.limit) {

@@ -46,16 +46,36 @@ export async function getTableStructure(tableName: string) {
 export async function fetchData<T>(
   table: string,
   condition?: string,
-  options?: { limit?: number; offset?: number }
+  options?: { 
+    limit?: number; 
+    offset?: number;
+    orderBy?: string;
+  }
 ): Promise<T[]> {
   try {
     let query = supabase.from(table).select("*");
 
     if (condition) {
-      const [column, operator, value] = condition.split(/\s*(=|!=|>|<|>=|<=)\s*/);
-      if (operator === "=") {
-        query = query.eq(column, value.replace(/^'|'$/g, ""));
+      // Split the condition to separate the ORDER BY clause if it exists
+      const [filterCondition, ...orderParts] = condition.split(" ORDER BY ");
+      
+      // Apply the filter condition
+      if (filterCondition) {
+        const [column, operator, value] = filterCondition.split(/\s*(=|!=|>|<|>=|<=)\s*/);
+        if (operator === "=") {
+          query = query.eq(column, value.replace(/^'|'$/g, ""));
+        }
       }
+
+      // Apply ORDER BY if it was in the condition string
+      if (orderParts.length > 0) {
+        query = query.order(orderParts.join(" ORDER BY "));
+      }
+    }
+
+    // Apply options
+    if (options?.orderBy) {
+      query = query.order(options.orderBy);
     }
 
     if (options?.limit) {
@@ -130,3 +150,4 @@ export async function deleteData(tableName: string, filter?: string) {
     throw error;
   }
 }
+

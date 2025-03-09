@@ -36,7 +36,8 @@ export function SelectClientModal({
 
         const clients = await fetchData<Client>(
           "Clients",
-          `nail_tech_id = '${user.id}' ORDER BY name ASC`
+          `nail_tech_id = '${user.id}'`,
+          { orderBy: "name asc" }
         );
         setClients(clients);
       } catch (error) {
